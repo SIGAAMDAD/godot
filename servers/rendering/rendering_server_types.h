@@ -130,6 +130,17 @@ struct FrameProfileArea {
 	double cpu_msec;
 };
 
+enum class RenderFrameCallbackStage : uint8_t {
+	BEFORE_DRAW,
+	AFTER_GPU_SUBMIT,
+	AFTER_GPU_COMPLETE,
+};
+
+struct RenderFrameToken {
+	uint64_t frame_id = 0;
+	uint64_t gpu_submission = 0;
+};
+
 struct RenderFrameProfileSnapshot {
 	uint64_t frame_id = 0;
 	Vector<FrameProfileArea> areas;

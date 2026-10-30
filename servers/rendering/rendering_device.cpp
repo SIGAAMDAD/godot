@@ -8613,6 +8613,8 @@ void RenderingDevice::_execute_frame(bool p_present) {
 	execute_chained_cmds(present_swap_chain, frames[frame].fence, semaphore);
 	// Indicate the fence has been signaled so the next time the frame's contents need to be
 	// used, the CPU needs to wait on the work to be completed.
+	frames[frame].submitted_serial = frames_drawn - 1;
+	last_gpu_submitted_frame.store(frames[frame].submitted_serial, std::memory_order_release);
 	frames[frame].fence_signaled = true;
 
 	if (frame_can_present) {
@@ -8630,7 +8632,14 @@ void RenderingDevice::_stall_for_frame(uint32_t p_frame) {
 
 	if (frames[p_frame].fence_signaled) {
 		GodotProfileZoneGroupedFirst(_profile_zone, "driver->fence_wait");
-		driver->fence_wait(frames[p_frame].fence);
+		const Error fence_result = driver->fence_wait(frames[p_frame].fence);
+		if (fence_result == OK) {
+			// Publish completion only after a successful GPU fence wait.
+			const uint64_t completed = frames[p_frame].submitted_serial;
+			uint64_t previous = last_gpu_completed_frame.load(std::memory_order_relaxed);
+			while (previous < completed && !last_gpu_completed_frame.compare_exchange_weak(previous, completed, std::memory_order_release, std::memory_order_relaxed)) {
+			}
+		}
 		frames[p_frame].fence_signaled = false;
 
 		// Flush any pending requests for asynchronous buffer downloads.

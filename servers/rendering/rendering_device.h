@@ -1872,6 +1872,7 @@ private:
 		// Signaled by the command buffer submission. Must wait on this fence before beginning command recording for the frame.
 		RDD::FenceID fence;
 		bool fence_signaled = false;
+		uint64_t submitted_serial = 0;
 
 		// Semaphores the frame must wait on before executing the command buffer.
 		LocalVector<RDD::SemaphoreID> semaphores_to_wait_on;
@@ -1909,6 +1910,8 @@ private:
 	int frame = 0;
 	TightLocalVector<Frame> frames;
 	uint64_t frames_drawn = 0;
+	std::atomic<uint64_t> last_gpu_submitted_frame{ 0 };
+	std::atomic<uint64_t> last_gpu_completed_frame{ 0 };
 
 	// Whenever logic/physics request a graphics operation (not just deleting a resource) that requires
 	// us to flush all graphics commands, we must set frames_pending_resources_for_processing = frames.size().
@@ -2011,6 +2014,8 @@ public:
 	DriverWorkarounds get_driver_workarounds() const;
 
 	uint64_t get_frames_drawn() const { return frames_drawn; }
+	uint64_t get_last_submitted_gpu_frame() const { return last_gpu_submitted_frame.load(std::memory_order_acquire); }
+	uint64_t get_last_completed_gpu_frame() const { return last_gpu_completed_frame.load(std::memory_order_acquire); }
 	uint32_t get_frame_slot() const { return frame; }
 	bool is_on_render_thread() const { return render_thread_id == Thread::get_caller_id(); }
 	bool is_main_rendering_device() const { return is_main_instance; }

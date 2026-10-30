@@ -70,7 +70,19 @@ void RenderingServerDefault::request_frame_drawn_callback(const Callable &p_call
 	frame_drawn_callbacks.push_back(p_callable);
 }
 
-void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
+void RenderingServerDefault::request_frame_stage_callback(RenderingServerTypes::RenderFrameCallbackStage p_stage, const Callable &p_callable) {
+	if (!p_callable.is_valid()) {
+		return;
+	}
+	MutexLock admission(command_admission_mutex);
+	if (command_admission != CommandAdmissionState::RUNNING) {
+		return;
+	}
+	MutexLock lock(frame_callback_mutex);
+	pending_frame_callbacks.push_back({ p_stage, p_callable, {} });
+}
+
+void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step, uint64_t p_frame_id) {
 	const uint64_t render_frame_begin_us = OS::get_singleton()->get_ticks_usec();
 	GodotProfileZoneGroupedFirst(_profile_zone, "rasterizer->begin_frame");
 	RSG::rasterizer->begin_frame(frame_step);
@@ -111,6 +123,42 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
 
 	GodotProfileZoneGrouped(_profile_zone, "rasterizer->end_frame");
 	RSG::rasterizer->end_frame(p_swap_buffers);
+	{
+		// A frame's GPU submission and its eventual fence completion are distinct.
+		RenderingServerTypes::RenderFrameToken token{ p_frame_id, 0 };
+#ifdef RD_ENABLED
+		RenderingDevice *rd = RenderingDevice::get_singleton();
+		if (rd != nullptr && !rd->is_finalized()) {
+			token.gpu_submission = rd->get_last_submitted_gpu_frame();
+		}
+		const uint64_t completed_gpu = rd != nullptr && !rd->is_finalized() ? rd->get_last_completed_gpu_frame() : 0;
+#else
+		const uint64_t completed_gpu = 0;
+#endif
+		MutexLock lock(frame_callback_mutex);
+		for (List<FrameStageCallback>::Element *E = pending_frame_callbacks.front(); E;) {
+			List<FrameStageCallback>::Element *next = E->next();
+			if (E->get().stage != RenderingServerTypes::RenderFrameCallbackStage::BEFORE_DRAW) {
+				FrameStageCallback callback = E->get();
+				callback.token = token;
+				if (callback.stage == RenderingServerTypes::RenderFrameCallbackStage::AFTER_GPU_COMPLETE && token.gpu_submission != 0) {
+					awaiting_gpu_callbacks.push_back(callback);
+				} else if (callback.stage == RenderingServerTypes::RenderFrameCallbackStage::AFTER_GPU_SUBMIT) {
+					main_frame_callbacks.push_back(callback);
+				}
+				pending_frame_callbacks.erase(E);
+			}
+			E = next;
+		}
+		for (List<FrameStageCallback>::Element *E = awaiting_gpu_callbacks.front(); E;) {
+			List<FrameStageCallback>::Element *next = E->next();
+			if (completed_gpu >= E->get().token.gpu_submission) {
+				main_frame_callbacks.push_back(E->get());
+				awaiting_gpu_callbacks.erase(E);
+			}
+			E = next;
+		}
+	}
 
 #ifndef XR_DISABLED
 	if (xr_server != nullptr) {
@@ -225,14 +273,32 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
 		gpu_memory_snapshot.textures = updated_info[RSE::RENDERING_INFO_TEXTURE_MEM_USED];
 		gpu_memory_snapshot.buffers = updated_info[RSE::RENDERING_INFO_BUFFER_MEM_USED];
 		gpu_memory_snapshot.total = updated_info[RSE::RENDERING_INFO_VIDEO_MEM_USED];
-		gpu_memory_snapshot.frame_id = frame_profile_frame;
+		gpu_memory_snapshot.frame_id = p_frame_id;
 		published_frame_setup_time = frame_setup_time;
 		rendering_info_available = true;
 	}
 	GodotMemoryTracking::publish_render_frame_us(OS::get_singleton()->get_ticks_usec() - render_frame_begin_us);
 }
 
+void RenderingServerDefault::_drain_frame_stage_callbacks_main() {
+	DEV_ASSERT(Thread::is_main_thread());
+	List<FrameStageCallback> ready;
+	{
+		MutexLock lock(frame_callback_mutex);
+		while (main_frame_callbacks.front()) {
+			ready.push_back(main_frame_callbacks.front()->get());
+			main_frame_callbacks.pop_front();
+		}
+	}
+	for (const FrameStageCallback &callback : ready) {
+		if (callback.callback.is_valid()) {
+			callback.callback.call(callback.token.frame_id);
+		}
+	}
+}
+
 void RenderingServerDefault::_run_post_draw_steps() {
+	_drain_frame_stage_callbacks_main();
 	while (frame_drawn_callbacks.front()) {
 		Callable c = frame_drawn_callbacks.front()->get();
 		Variant result;
@@ -286,6 +352,13 @@ void RenderingServerDefault::_init() {
 }
 
 void RenderingServerDefault::_finish() {
+	// Cancel unsignaled GPU and shutdown-associated callbacks before freeing resources.
+	{
+		MutexLock lock(frame_callback_mutex);
+		pending_frame_callbacks.clear();
+		awaiting_gpu_callbacks.clear();
+		main_frame_callbacks.clear();
+	}
 	renderer_resources_active.store(false, std::memory_order_release);
 	{
 		MutexLock lock(profile_snapshot_mutex);
@@ -371,6 +444,11 @@ void RenderingServerDefault::finish() {
 			return;
 		}
 		command_admission = CommandAdmissionState::DRAINING;
+		// Resource initializers may run on import workers. They must return
+		// before destroying renderer storage and the main RenderingDevice.
+		while (pending_resource_operations != 0) {
+			resource_operations_drained.wait(lock);
+		}
 	}
 	if (create_thread) {
 		command_queue.push(this, &RenderingServerDefault::_finish);
@@ -451,6 +529,12 @@ Vector<RenderingServerTypes::FrameProfileArea> RenderingServerDefault::get_frame
 }
 
 /* TESTING */
+
+void RenderingServerDefault::_create_native_texture_on_render_thread(int64_t p_request_address) {
+	NativeTextureCreateRequest *request = reinterpret_cast<NativeTextureCreateRequest *>(uintptr_t(uint64_t(p_request_address)));
+	request->result = RSG::texture_storage->texture_create_from_native_handle(request->type, request->format,
+			request->handle, request->width, request->height, request->depth, request->layers, request->layered_type);
+}
 
 void RenderingServerDefault::_get_default_clear_color_sync(int64_t p_result_address) {
 	Color *result = reinterpret_cast<Color *>(uintptr_t(uint64_t(p_result_address)));
@@ -622,15 +706,36 @@ void RenderingServerDefault::sync() {
 
 void RenderingServerDefault::draw(bool p_present, double frame_step) {
 	ERR_FAIL_COND_MSG(!Thread::is_main_thread(), "Manually triggering the draw function from the RenderingServer can only be done on the main thread. Call this function from the main thread or use call_deferred().");
+	const uint64_t frame_id = next_frame_token.fetch_add(1, std::memory_order_relaxed) + 1;
+	// Before-draw callbacks execute on the main thread, with their frame token.
+	List<FrameStageCallback> before_draw;
+	{
+		MutexLock lock(frame_callback_mutex);
+		for (List<FrameStageCallback>::Element *E = pending_frame_callbacks.front(); E;) {
+			List<FrameStageCallback>::Element *next = E->next();
+			if (E->get().stage == RenderingServerTypes::RenderFrameCallbackStage::BEFORE_DRAW) {
+				FrameStageCallback callback = E->get();
+				callback.token.frame_id = frame_id;
+				before_draw.push_back(callback);
+				pending_frame_callbacks.erase(E);
+			}
+			E = next;
+		}
+	}
+	for (const FrameStageCallback &callback : before_draw) {
+		if (callback.callback.is_valid()) {
+			callback.callback.call(frame_id);
+		}
+	}
 	// Sample before frame_pre_draw so notifications from callbacks stay pending.
 	const uint64_t submitted_generation = change_generation.load(std::memory_order_acquire);
 	RS::get_singleton()->emit_signal(SNAME("frame_pre_draw"));
 	// The generation is acknowledged only at the draw submission boundary.
 	last_submitted_generation = submitted_generation;
 	if (create_thread) {
-		command_queue.push(this, &RenderingServerDefault::_draw, p_present, frame_step);
+		command_queue.push(this, &RenderingServerDefault::_draw, p_present, frame_step, frame_id);
 	} else {
-		_draw(p_present, frame_step);
+		_draw(p_present, frame_step, frame_id);
 	}
 }
 
