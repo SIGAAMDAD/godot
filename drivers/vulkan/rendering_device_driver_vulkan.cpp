@@ -2250,7 +2250,10 @@ RDD::BufferID RenderingDeviceDriverVulkan::buffer_create(uint64_t p_size, BitFie
 	buf_info->allocation.handle = allocation;
 	buf_info->allocation.size = alloc_info.size;
 	buf_info->size = original_size;
-	GodotMemoryTracking::record_gpu_alloc(allocation, alloc_info.size);
+	{
+		GodotMemoryTracking::ScopeCategory category(GodotMemoryTracking::CATEGORY_VULKAN_BUFFER);
+		GodotMemoryTracking::record_gpu_alloc(allocation, alloc_info.size);
+	}
 
 	return BufferID(buf_info);
 }
@@ -2639,7 +2642,10 @@ RDD::TextureID RenderingDeviceDriverVulkan::texture_create(const TextureFormat &
 	tex_info->transient = (p_format.usage_bits & TEXTURE_USAGE_TRANSIENT_BIT) != 0;
 #endif
 	vmaGetAllocationInfo(allocator, tex_info->allocation.handle, &tex_info->allocation.info);
-	GodotMemoryTracking::record_gpu_alloc(allocation, tex_info->allocation.info.size);
+	{
+		GodotMemoryTracking::ScopeCategory category(GodotMemoryTracking::CATEGORY_VULKAN_TEXTURE);
+		GodotMemoryTracking::record_gpu_alloc(allocation, tex_info->allocation.info.size);
+	}
 
 #if PRINT_NATIVE_COMMANDS
 	print_line(vformat("vkCreateImageView: 0x%uX for 0x%uX", uint64_t(vk_image_view), uint64_t(vk_image)));
