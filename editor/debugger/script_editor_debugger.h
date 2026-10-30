@@ -148,6 +148,9 @@ private:
 	Button *vmem_alloc_more = nullptr;
 	LineEdit *vmem_capture_status = nullptr;
 	Tree *vmem_alloc_tree = nullptr;
+	Tree *vmem_gpu_alloc_tree = nullptr;
+	Button *vmem_gpu_alloc_more = nullptr;
+	int64_t vmem_gpu_alloc_next_offset = 0;
 	int64_t vmem_capture_id = 0;
 	int64_t vmem_alloc_next_offset = 0;
 	TextureRect *vmem_notice_icon = nullptr;
@@ -227,6 +230,7 @@ private:
 	void _msg_servers_memory_usage(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_status(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_records(uint64_t p_thread_id, const Array &p_data);
+	void _msg_servers_memprof_gpu_records(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_drawn(uint64_t p_thread_id, const Array &p_data);
 	void _msg_stack_dump(uint64_t p_thread_id, const Array &p_data);
 	void _msg_stack_frame_vars(uint64_t p_thread_id, const Array &p_data);
@@ -263,6 +267,7 @@ private:
 	void _video_mem_capture_start();
 	void _video_mem_capture_stop();
 	void _video_mem_capture_more();
+	void _video_mem_capture_gpu_more();
 	void _video_mem_export();
 
 	void _resources_reimported(const PackedStringArray &p_resources);
