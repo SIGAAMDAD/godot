@@ -150,6 +150,7 @@ private:
 	Button *vmem_capture_stop = nullptr;
 	Button *vmem_alloc_more = nullptr;
 	LineEdit *vmem_capture_status = nullptr;
+	LineEdit *vmem_capture_filter = nullptr;
 	Tree *vmem_alloc_tree = nullptr;
 	Tree *vmem_gpu_alloc_tree = nullptr;
 	Tree *vmem_logical_alloc_tree = nullptr;
@@ -307,6 +308,7 @@ private:
 	void _video_mem_capture_logical_more();
 	void _video_mem_capture_event_more();
 	void _video_mem_capture_export();
+	void _video_mem_filter_changed(const String &p_filter);
 	void _video_mem_trace_export();
 	void _video_mem_trace_import();
 	void _video_mem_trace_pin_baseline();
