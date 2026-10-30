@@ -127,12 +127,12 @@ void write_event(uint8_t *p_dst, const Event &p_event) {
 	p_dst[30] = 0;
 	p_dst[31] = 0;
 }
-void write_record(uint8_t *p_dst, const Record &p_record, bool p_gpu) {
+void write_record(uint8_t *p_dst, const Record &p_record, uint8_t p_domain) {
 	put64(p_dst, p_record.allocation_id);
 	put64(p_dst + 8, p_record.bytes);
 	put32(p_dst + 16, p_record.category);
 	put32(p_dst + 20, p_record.generation);
-	p_dst[24] = p_gpu ? 1 : 0;
+	p_dst[24] = p_domain;
 	std::memset(p_dst + 25, 0, 7);
 }
 }
@@ -175,15 +175,16 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 		}
 	}
 	Record records[64];
-	for (int gpu = 0; gpu < 2; ++gpu) {
+	for (int gpu = 0; gpu < 3; ++gpu) {
 		size_t offset = 0;
 		while (true) {
-			const size_t count = gpu ? gpu_live_records(offset, records, 64) : live_records(offset, records, 64);
+			const size_t count = gpu == 2 ? gpu_logical_live_records(offset, records, 64) :
+					gpu == 1 ? gpu_live_records(offset, records, 64) : live_records(offset, records, 64);
 			if (!count) {
 				break;
 			}
 			for (size_t i = 0; i < count; ++i) {
-				write_record(payload + ROW_SIZE * i, records[i], gpu != 0);
+				write_record(payload + ROW_SIZE * i, records[i], uint8_t(gpu));
 			}
 			if (!writer.chunk(8, uint64_t(offset), uint32_t(count), payload, uint32_t(ROW_SIZE * count))) {
 				return false;
@@ -198,6 +199,13 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 	const Summary end = summary();
 	if (end.active || end.capture_id != begin.capture_id) {
 		return false; // A restarted capture can never be mixed into this trace.
+	}
+	uint8_t logical_totals[24] = {};
+	put64(logical_totals, end.gpu_logical_bytes);
+	put64(logical_totals + 8, end.gpu_logical_peak_bytes);
+	put64(logical_totals + 16, end.gpu_logical_allocations);
+	if (!writer.chunk(9, end.sequence, 3, logical_totals, sizeof(logical_totals))) {
+		return false;
 	}
 	uint8_t footer[FOOTER_SIZE] = {};
 	const uint64_t counts[] = { end.capture_id, end.sequence, end.live_bytes, end.peak_bytes,
@@ -221,6 +229,9 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 	const uint64_t capture = get64(p_bytes + 24);
 	uint64_t hash = update_hash(HASH_BASIS, p_bytes, HEADER_SIZE);
 	uint64_t last_seq = 0;
+	uint64_t logical_live = 0;
+	uint64_t logical_peak = 0;
+	uint64_t logical_allocations = 0;
 	size_t offset = HEADER_SIZE;
 	bool completed = false;
 	while (offset + CHUNK_HEADER_SIZE <= p_size) {
@@ -262,14 +273,21 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 					record.bytes = get64(row + 8);
 					record.category = get32(row + 16);
 					record.generation = get32(row + 20);
-					if (row[24] > 1) {
+					if (row[24] > 2) {
 						return false;
 					}
-					if (p_visitor.on_record && !p_visitor.on_record(record, row[24] != 0, p_visitor.userdata)) {
+					if (p_visitor.on_record && !p_visitor.on_record(record, row[24], p_visitor.userdata)) {
 						return false;
 					}
 				}
 			}
+		} else if (type == 9) {
+			if (len != 24 || count != 3) {
+				return false;
+			}
+			logical_live = get64(data);
+			logical_peak = get64(data + 8);
+			logical_allocations = get64(data + 16);
 		} else if (type == 7) {
 			if (completed || count != 1 || len != FOOTER_SIZE || get64(data) != capture ||
 					get64(data + 92) != hash || offset + CHUNK_HEADER_SIZE + len != p_size) {
@@ -287,6 +305,9 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 			s.gpu_allocation_bytes = get64(data + 64);
 			s.gpu_peak_bytes = get64(data + 72);
 			s.gpu_live_allocations = get64(data + 80);
+			s.gpu_logical_bytes = logical_live;
+			s.gpu_logical_peak_bytes = logical_peak;
+			s.gpu_logical_allocations = logical_allocations;
 			s.incomplete = get32(data + 88) != 0;
 			if (p_visitor.on_summary && !p_visitor.on_summary(s, p_visitor.userdata)) {
 				return false;
