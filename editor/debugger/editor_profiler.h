@@ -41,6 +41,7 @@
 
 class ImageTexture;
 class ColorRect;
+class Label;
 
 class EditorProfiler : public VBoxContainer {
 	GDCLASS(EditorProfiler, VBoxContainer);
