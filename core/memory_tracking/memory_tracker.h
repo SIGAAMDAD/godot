@@ -133,6 +133,12 @@ bool renderer_sample(RendererSample &r_sample);
 // Last completed render frame CPU duration for editor A/B telemetry.
 void publish_render_frame_us(uint64_t p_microseconds);
 uint64_t last_render_frame_us();
+struct CompletedRenderFrameSample {
+	uint64_t frame_id = 0;
+	uint64_t cpu_duration_us = 0;
+};
+void publish_completed_render_frame(uint64_t p_frame_id, uint64_t p_microseconds);
+CompletedRenderFrameSample last_completed_render_frame();
 
 
 class ScopeCategory {

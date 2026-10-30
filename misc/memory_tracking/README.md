@@ -109,3 +109,39 @@ render-worker measurement, not GPU elapsed time; when the rendering thread is
 separate, the sample can describe a recently completed prior frame. The
 render_queue_wait_us field is the measured main-thread RenderingServer::sync
 wait. Neither value should be represented as input-to-paint latency.
+
+### Editor render thread source-level timing provenance
+
+The CSV `render_server_frame_us` column measures **CPU execution on the render
+worker**, not GPU execution. `render_completed_frame_id` records the render
+frame that produced that sample, which may differ from the current main-loop
+`frame_id` in separate mode. `render_queue_wait_us` measures the main thread's
+existing `RenderingServer::sync()` barrier only, not a GPU fence wait.
+GPU duration and input-to-display latency are left blank until independent
+measurement is available. The comparison tool derives 1% low editor FPS from
+the average duration of the slowest 1% frames in each recorded trial.
+The complete Windows/GPU benchmarking matrix remains deferred acceptance.
+
+### Separate-editor-render-thread source audit (implementation pass)
+
+The experimental editor mode remains opt-in. The following calls and their
+transitive ownership boundaries were reviewed without changing the existing
+asynchronous importer or globally disabling `can_create_resources_async()`:
+
+| Existing entry point | Dispatch classification | Implemented lifetime boundary |
+|---|---|---|
+| `FUNCRIDTEX0`–`FUNCRIDTEX6` texture factories | Existing asynchronous storage creation, guarded against renderer shutdown | Admission tracks the active direct initializer; pre-existing RD resource-creation synchronization remains in place |
+| `shader_create`, `shader_create_from_code` | Existing asynchronous storage creation; code and path hint follow initialization in defined order | Guard covers complete direct initializer and enqueue; path hint precedes code for queued compilation |
+| `material_create_from_shader`, `mesh_create_from_surfaces` | Existing asynchronous storage creation | Guard covers allocation/initialization during renderer shutdown |
+| `FUNCRIDSPLIT` RID factories | Queue-ordered asynchronous initialization where called off render thread | Guard covers allocation and enqueuing before teardown begins |
+| `texture_create_from_native_handle` | **RENDER_THREAD_ONLY** | Synchronous, admission-checked render-owner dispatch, with caller-owned result alive through completion |
+| `texture_get_rd_texture`, mesh RD RID getters, and synchronous readbacks | Existing queue-mediated readback | Their synchronous APIs and established ordering are retained; no unlocked direct driver access was introduced |
+| Scene/canvas interpolation and renderer-debug setters | **RENDER_THREAD_ONLY** | Ordered render command dispatch, without requiring every physics tick to block |
+| GPU memory counters and frame profile | **SNAPSHOT** | Per-frame copies, short mutex publication, and main-thread-only debugger consumers |
+| Video adapter type and maximum viewport size | **IMMUTABLE AFTER INIT** | Captured during render-server initialization; never dereference renderer storage during polling |
+
+Source review is not Windows/GPU acceptance. Targeted C++ translation units and
+standalone concurrency fixtures verify syntax and contract invariants; the
+Windows DisplayServer implementation, external native callbacks, GPU-fence
+behavior, importer concurrency, and actual swapchain sequences require the
+separately scheduled Windows/Vulkan runtime acceptance matrix.

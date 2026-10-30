@@ -277,7 +277,7 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step, uint6
 		published_frame_setup_time = frame_setup_time;
 		rendering_info_available = true;
 	}
-	GodotMemoryTracking::publish_render_frame_us(OS::get_singleton()->get_ticks_usec() - render_frame_begin_us);
+	GodotMemoryTracking::publish_completed_render_frame(p_frame_id, OS::get_singleton()->get_ticks_usec() - render_frame_begin_us);
 }
 
 void RenderingServerDefault::_drain_frame_stage_callbacks_main() {

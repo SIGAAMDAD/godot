@@ -103,6 +103,8 @@ struct State {
 std::atomic<State *> state{ nullptr };
 thread_local uint32_t active_category = 0;
 std::atomic<uint64_t> completed_render_frame_us{ 0 };
+std::mutex completed_render_frame_mutex;
+CompletedRenderFrameSample completed_render_frame_sample;
 
 size_t shard_index(uintptr_t p_ptr) {
 	uint64_t h = (uint64_t)(p_ptr >> 4);
@@ -577,6 +579,18 @@ void publish_render_frame_us(uint64_t p_microseconds) {
 
 uint64_t last_render_frame_us() {
 	return completed_render_frame_us.load(std::memory_order_acquire);
+}
+
+void publish_completed_render_frame(uint64_t p_frame_id, uint64_t p_microseconds) {
+	std::lock_guard<std::mutex> lock(completed_render_frame_mutex);
+	completed_render_frame_sample.frame_id = p_frame_id;
+	completed_render_frame_sample.cpu_duration_us = p_microseconds;
+	completed_render_frame_us.store(p_microseconds, std::memory_order_release);
+}
+
+CompletedRenderFrameSample last_completed_render_frame() {
+	std::lock_guard<std::mutex> lock(completed_render_frame_mutex);
+	return completed_render_frame_sample;
 }
 
 void set_frame(uint64_t p_frame) {

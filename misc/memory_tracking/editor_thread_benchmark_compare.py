@@ -18,6 +18,7 @@ def load(p,expected):
   if r.get('gpu_supported')=='0' and r.get('gpu_frame_us') not in ('',None):raise ValueError(f'{p}: unsupported GPU duration must be empty')
   if 'timestamp_us' in r and (not r['timestamp_us'] or int(r['timestamp_us'])<=0):raise ValueError(f'{p}: invalid editor timestamp')
   if r.get('render_queue_wait_us') not in ('',None) and float(r['render_queue_wait_us'])<0:raise ValueError(f'{p}: negative render queue wait')
+  if r.get('render_completed_frame_id') not in ('',None) and int(r['render_completed_frame_id'])<0:raise ValueError(f'{p}: invalid completed render frame')
   k=(r['run_id'],r['trial_id'],r['capture_id']);trials.setdefault(k,[]).append(r)
  for t,rr in trials.items():
   seq=[int(x['frame_id']) for x in rr]
@@ -35,6 +36,14 @@ def summary(trials,metric):
   if a:vals.append((t,len(a),statistics.median(a),pctl(a,.95),pctl(a,.99)))
  return vals
 
+def low_one_percent(trials):
+ rates=[]
+ for rr in trials.values():
+  durations=sorted((float(r['editor_main_frame_us']) for r in rr),reverse=True)
+  slowest=durations[:max(1,math.ceil(len(durations)*0.01))]
+  rates.append(1_000_000/statistics.mean(slowest))
+ return statistics.median(rates)
+
 def compare(a,b):
  safe,st=load(a,'safe');sep,dt=load(b,'separate')
  for r in safe+sep:
@@ -48,6 +57,7 @@ def compare(a,b):
   if not s or not d:print(f'{metric}: unavailable in a mode');continue
   def agg(a,i):return statistics.median(x[i] for x in a)
   print(f'{metric}: safe p50/p95/p99 {agg(s,2):.2f}/{agg(s,3):.2f}/{agg(s,4):.2f} us; separate {agg(d,2):.2f}/{agg(d,3):.2f}/{agg(d,4):.2f} us; p95 delta {agg(d,3)-agg(s,3):+.2f} us ({100*(agg(d,3)/agg(s,3)-1):+.2f}%)')
+ print(f'1% low editor FPS (slowest 1% frame durations): safe {low_one_percent(st):.2f}; separate {low_one_percent(dt):.2f}')
  print(f'Control checks: PASS. Safe trials {len(st)}, separate trials {len(dt)}; safe frames {len(safe)}, separate frames {len(sep)}')
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('--safe',required=True);p.add_argument('--separate',required=True);a=p.parse_args()

@@ -5301,7 +5301,7 @@ bool Main::iteration() {
 #endif
 			if (editor_thread_benchmark_file) {
 				editor_thread_benchmark_run_id = OS::get_singleton()->get_ticks_usec();
-				std::fprintf(editor_thread_benchmark_file, "run_id,trial_id,workload_id,workload_sha256,build_sha,host_id,backend,viewport_width,viewport_height,vsync,scaling_mode,requested_mode,effective_mode,capture_id,frame_id,timestamp_us,editor_main_frame_us,render_server_frame_us,render_queue_wait_us,gpu_frame_us,input_to_paint_us,editor_rss_bytes,gpu_reported_bytes,gpu_supported,errors\n");
+				std::fprintf(editor_thread_benchmark_file, "run_id,trial_id,workload_id,workload_sha256,build_sha,host_id,backend,viewport_width,viewport_height,vsync,scaling_mode,requested_mode,effective_mode,capture_id,frame_id,timestamp_us,editor_main_frame_us,render_server_frame_us,render_queue_wait_us,gpu_frame_us,input_to_paint_us,editor_rss_bytes,gpu_reported_bytes,gpu_supported,errors,render_completed_frame_id\n");
 			} else {
 				OS::get_singleton()->print("Could not open editor render-thread benchmark CSV.\n");
 				editor_thread_benchmark_path.clear();
@@ -5316,15 +5316,18 @@ bool Main::iteration() {
 			const CharString backend = OS::get_singleton()->get_current_rendering_driver_name().utf8();
 			const uint64_t frame_duration_us = OS::get_singleton()->get_ticks_usec() - ticks;
 			const uint64_t timestamp_us = OS::get_singleton()->get_ticks_usec();
-			std::fprintf(editor_thread_benchmark_file, "%llu,%d,%s,%s,%s,%s,%s,%d,%d,%d,%s,%s,%s,%llu,%llu,%llu,%llu,%llu,%llu,,,,,0,\n",
+			const GodotMemoryTracking::CompletedRenderFrameSample render_sample = GodotMemoryTracking::last_completed_render_frame();
+			// GPU completion and input-to-display latency are unsupported here, so their cells stay blank.
+			std::fprintf(editor_thread_benchmark_file, "%llu,%d,%s,%s,%s,%s,%s,%d,%d,%d,%s,%s,%s,%llu,%llu,%llu,%llu,%llu,%llu,,,,,0,,%llu\n",
 					(unsigned long long)editor_thread_benchmark_run_id, editor_thread_benchmark_trial_id,
 					editor_thread_benchmark_workload.utf8().get_data(), editor_thread_benchmark_workload_hash.utf8().get_data(),
 					build_sha.get_data(), editor_thread_benchmark_host.utf8().get_data(), backend.get_data(),
 					viewport.width, viewport.height, int(window_vsync_mode), "default", requested, effective,
 					(unsigned long long)editor_thread_benchmark_run_id, (unsigned long long)editor_thread_benchmark_frames++,
 					(unsigned long long)timestamp_us, (unsigned long long)frame_duration_us,
-					(unsigned long long)GodotMemoryTracking::last_render_frame_us(),
-					(unsigned long long)editor_render_sync_us);
+					(unsigned long long)render_sample.cpu_duration_us,
+					(unsigned long long)editor_render_sync_us,
+					(unsigned long long)render_sample.frame_id);
 		}
 	}
 #endif
