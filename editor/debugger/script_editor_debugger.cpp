@@ -368,6 +368,7 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 			vmem_trace_current_count.clear();
 			vmem_trace_current_id = vmem_capture_id;
 			vmem_trace_current_valid = true;
+			vmem_trace_imported = true;
 			for (const GodotMemoryTracking::Record &record : imported.cpu) {
 				const uint64_t key = uint64_t(record.category);
 				vmem_trace_current_bytes[key] += int64_t(record.bytes);
@@ -401,6 +402,8 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				row->set_text(2, String::humanize_size(record.bytes));
 				row->set_text(3, itos(record.category));
 				row->set_text(4, itos(record.generation));
+				row->set_text(5, itos(record.stack_id));
+				row->set_metadata(0, int64_t(record.stack_id));
 			}
 			for (int i = 0; i < MIN(imported.gpu.size(), 1024); ++i) {
 				const GodotMemoryTracking::Record &record = imported.gpu[i];
@@ -410,6 +413,8 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				row->set_text(2, String::humanize_size(record.bytes));
 				row->set_text(3, itos(record.category));
 				row->set_text(4, itos(record.generation));
+				row->set_text(5, itos(record.stack_id));
+				row->set_metadata(0, int64_t(record.stack_id));
 			}
 			for (int i = 0; i < MIN(imported.logical.size(), 1024); ++i) {
 				const GodotMemoryTracking::Record &record = imported.logical[i];
@@ -419,6 +424,8 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				row->set_text(2, String::humanize_size(record.bytes));
 				row->set_text(3, itos(record.category));
 				row->set_text(4, itos(record.generation));
+				row->set_text(5, itos(record.stack_id));
+				row->set_metadata(0, int64_t(record.stack_id));
 			}
 			for (int i = 0; i < MIN(imported.events.size(), 2048); ++i) {
 				const GodotMemoryTracking::Event &event = imported.events[i];
@@ -431,6 +438,8 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				row->set_text(5, event.kind == GodotMemoryTracking::RecordKind::ALLOC ? TTR("Alloc") :
 						event.kind == GodotMemoryTracking::RecordKind::FREE ? TTR("Free") : TTR("Realloc"));
 				row->set_text(6, event.gpu ? TTR("GPU") : TTR("CPU"));
+				row->set_text(7, itos(event.stack_id));
+				row->set_metadata(0, int64_t(event.stack_id));
 			}
 			vmem_alloc_more->set_disabled(true);
 			vmem_gpu_alloc_more->set_disabled(true);
@@ -518,6 +527,9 @@ void ScriptEditorDebugger::_video_mem_capture_start() {
 	vmem_trace_payload.clear();
 	vmem_trace_export_path.clear();
 	vmem_trace_current_valid = false;
+	vmem_trace_imported = false;
+	vmem_last_stack = 0;
+	vmem_callstack_tree->clear();
 	vmem_trace_current_bytes.clear();
 	vmem_trace_current_count.clear();
 	vmem_alloc_next_offset = 0;
@@ -567,6 +579,27 @@ void ScriptEditorDebugger::_video_mem_trace_export() {
 	file_dialog->add_filter("*.gdmemtrace", "Godot Memory Trace");
 	file_dialog_purpose = SAVE_MEMORY_CAPTURE_TRACE;
 	file_dialog->popup_file_dialog();
+}
+
+void ScriptEditorDebugger::_video_mem_stack_selected(Tree *p_source) {
+	TreeItem *item = p_source ? p_source->get_selected() : nullptr;
+	if (!item || item->get_metadata(0).get_type() != Variant::INT) {
+		return;
+	}
+	const int64_t stack_id = item->get_metadata(0);
+	vmem_last_stack = uint32_t(stack_id);
+	vmem_callstack_tree->clear();
+	if (stack_id < 1 || stack_id > 8192) {
+		return;
+	}
+	if (vmem_trace_imported) {
+		TreeItem *root = vmem_callstack_tree->create_item();
+		TreeItem *row = vmem_callstack_tree->create_item(root);
+		row->set_text(0, itos(stack_id));
+		row->set_text(1, TTR("Program counters are not exported in privacy-safe traces."));
+		return;
+	}
+	_put_msg("servers:memprof_stack", Array{ vmem_capture_id, stack_id });
 }
 
 void ScriptEditorDebugger::_video_mem_trace_pin_baseline() {
@@ -3033,14 +3066,16 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		// Keep the original Video RAM resource list and controls intact.
 		native_details->add_child(memnew(Label(TTRC("Native CPU allocations remaining after capture stop:"))));
 		vmem_alloc_tree = memnew(Tree);
-		vmem_alloc_tree->set_columns(5);
+		vmem_alloc_tree->set_columns(6);
 		vmem_alloc_tree->set_column_titles_visible(true);
 		vmem_alloc_tree->set_column_title(0, TTRC("Allocation ID"));
 		vmem_alloc_tree->set_column_title(1, TTRC("Address"));
 		vmem_alloc_tree->set_column_title(2, TTRC("Size"));
 		vmem_alloc_tree->set_column_title(3, TTRC("Category"));
 		vmem_alloc_tree->set_column_title(4, TTRC("Generation"));
+		vmem_alloc_tree->set_column_title(5, TTRC("Stack ID"));
 		vmem_alloc_tree->set_hide_root(true);
+		vmem_alloc_tree->connect(SceneStringName(item_selected), callable_mp(this, &ScriptEditorDebugger::_video_mem_stack_selected).bind(vmem_alloc_tree));
 		vmem_alloc_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
 		native_details->add_child(vmem_alloc_tree);
 		vmem_alloc_more = memnew(Button(TTRC("Load More Allocations")));
@@ -3049,14 +3084,16 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_alloc_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_more));
 		native_details->add_child(memnew(Label(TTRC("GPU backing allocations created during capture (not logical resource totals):"))));
 		vmem_gpu_alloc_tree = memnew(Tree);
-		vmem_gpu_alloc_tree->set_columns(5);
+		vmem_gpu_alloc_tree->set_columns(6);
 		vmem_gpu_alloc_tree->set_column_titles_visible(true);
 		vmem_gpu_alloc_tree->set_column_title(0, TTRC("Allocation ID"));
 		vmem_gpu_alloc_tree->set_column_title(1, TTRC("Backing Handle"));
 		vmem_gpu_alloc_tree->set_column_title(2, TTRC("Size"));
 		vmem_gpu_alloc_tree->set_column_title(3, TTRC("Category"));
 		vmem_gpu_alloc_tree->set_column_title(4, TTRC("Generation"));
+		vmem_gpu_alloc_tree->set_column_title(5, TTRC("Stack ID"));
 		vmem_gpu_alloc_tree->set_hide_root(true);
+		vmem_gpu_alloc_tree->connect(SceneStringName(item_selected), callable_mp(this, &ScriptEditorDebugger::_video_mem_stack_selected).bind(vmem_gpu_alloc_tree));
 		vmem_gpu_alloc_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
 		native_details->add_child(vmem_gpu_alloc_tree);
 		vmem_gpu_alloc_more = memnew(Button(TTRC("Load More GPU Allocations")));
@@ -3065,14 +3102,16 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_gpu_alloc_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_gpu_more));
 		native_details->add_child(memnew(Label(TTRC("Logical GPU buffer/texture RIDs alive at stop (not physical backing bytes):"))));
 		vmem_logical_alloc_tree = memnew(Tree);
-		vmem_logical_alloc_tree->set_columns(5);
+		vmem_logical_alloc_tree->set_columns(6);
 		vmem_logical_alloc_tree->set_column_titles_visible(true);
 		vmem_logical_alloc_tree->set_column_title(0, TTRC("Allocation ID"));
 		vmem_logical_alloc_tree->set_column_title(1, TTRC("RID"));
 		vmem_logical_alloc_tree->set_column_title(2, TTRC("Size"));
 		vmem_logical_alloc_tree->set_column_title(3, TTRC("Category"));
 		vmem_logical_alloc_tree->set_column_title(4, TTRC("Generation"));
+		vmem_logical_alloc_tree->set_column_title(5, TTRC("Stack ID"));
 		vmem_logical_alloc_tree->set_hide_root(true);
+		vmem_logical_alloc_tree->connect(SceneStringName(item_selected), callable_mp(this, &ScriptEditorDebugger::_video_mem_stack_selected).bind(vmem_logical_alloc_tree));
 		vmem_logical_alloc_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
 		native_details->add_child(vmem_logical_alloc_tree);
 		vmem_logical_alloc_more = memnew(Button(TTRC("Load More Logical GPU RIDs")));
@@ -3082,7 +3121,7 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 
 		native_details->add_child(memnew(Label(TTRC("Allocation/free timeline (bounded ring; lost events shown in capture status):"))));
 		vmem_event_tree = memnew(Tree);
-		vmem_event_tree->set_columns(7);
+		vmem_event_tree->set_columns(8);
 		vmem_event_tree->set_column_titles_visible(true);
 		vmem_event_tree->set_column_title(0, TTRC("Sequence"));
 		vmem_event_tree->set_column_title(1, TTRC("Allocation ID"));
@@ -3091,11 +3130,23 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_event_tree->set_column_title(4, TTRC("Category"));
 		vmem_event_tree->set_column_title(5, TTRC("Event"));
 		vmem_event_tree->set_column_title(6, TTRC("Memory"));
+		vmem_event_tree->set_column_title(7, TTRC("Stack ID"));
 		vmem_event_tree->set_hide_root(true);
+		vmem_event_tree->connect(SceneStringName(item_selected), callable_mp(this, &ScriptEditorDebugger::_video_mem_stack_selected).bind(vmem_event_tree));
 		vmem_event_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
 		native_details->add_child(vmem_event_tree);
 		vmem_event_more = memnew(Button(TTRC("Load Allocation Events")));
 		native_details->add_child(vmem_event_more);
+		native_details->add_child(memnew(Label(TTRC("Selected Allocation Callstack (raw program counters from live debugger):"))));
+		vmem_callstack_tree = memnew(Tree);
+		vmem_callstack_tree->set_columns(2);
+		vmem_callstack_tree->set_column_titles_visible(true);
+		vmem_callstack_tree->set_column_title(0, TTRC("Frame"));
+		vmem_callstack_tree->set_column_title(1, TTRC("Program Counter"));
+		vmem_callstack_tree->set_hide_root(true);
+		vmem_callstack_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
+		native_details->add_child(vmem_callstack_tree);
+
 		vmem_event_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_event_more));
 		native_details->add_child(memnew(Label(TTRC("Imported Capture Comparison (CPU/GPU backing bytes by category):"))));
 		HBoxContainer *compare_bar = memnew(HBoxContainer);
