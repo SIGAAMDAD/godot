@@ -180,6 +180,7 @@ private:
 	uint32_t vmem_last_stack = 0;
 	bool vmem_trace_imported = false;
 	bool vmem_native_recording = false;
+	uint64_t vmem_last_status_poll_us = 0;
 	int64_t vmem_trace_requested_capture = 0;
 	int64_t vmem_capture_id = 0;
 	int64_t vmem_alloc_next_offset = 0;
