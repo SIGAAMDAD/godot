@@ -8432,7 +8432,10 @@ uint64_t RenderingDevice::get_memory_usage(MemoryType p_type) const {
 			return texture_memory.get();
 		}
 		case MEMORY_TOTAL: {
-			return driver->get_total_memory_used();
+			const RDD::MemoryBudgetSnapshot budget = driver->get_memory_budget_snapshot();
+			GodotMemoryTracking::publish_gpu_budget(budget.allocated_bytes, budget.reserved_bytes,
+					budget.budget_bytes, budget.supported);
+			return budget.supported ? budget.allocated_bytes : driver->get_total_memory_used();
 		}
 		default: {
 			DEV_ASSERT(false);
