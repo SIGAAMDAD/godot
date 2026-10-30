@@ -25,6 +25,14 @@
 
 namespace GodotMemoryTracking {
 
+enum AllocationCategory : uint32_t {
+	CATEGORY_UNCLASSIFIED = 0,
+	CATEGORY_VULKAN_BUFFER = 100,
+	CATEGORY_VULKAN_TEXTURE = 101,
+	CATEGORY_D3D12_BUFFER = 110,
+	CATEGORY_D3D12_TEXTURE = 111,
+};
+
 enum class RecordKind : uint8_t { ALLOC, FREE, REALLOC };
 
 struct Record {
