@@ -7489,6 +7489,27 @@ uint64_t RenderingDeviceDriverVulkan::get_resource_native_handle(DriverResource 
 	}
 }
 
+RenderingDeviceDriverVulkan::MemoryBudgetSnapshot RenderingDeviceDriverVulkan::get_memory_budget_snapshot() {
+	MemoryBudgetSnapshot snapshot;
+	if (allocator == VK_NULL_HANDLE) {
+		return snapshot;
+	}
+	const VkPhysicalDeviceMemoryProperties *memory_properties = nullptr;
+	vmaGetMemoryProperties(allocator, &memory_properties);
+	if (!memory_properties) {
+		return snapshot;
+	}
+	VmaBudget *budgets = ALLOCA_ARRAY(VmaBudget, memory_properties->memoryHeapCount);
+	vmaGetHeapBudgets(allocator, budgets);
+	for (uint32_t i = 0; i < memory_properties->memoryHeapCount; ++i) {
+		snapshot.allocated_bytes += budgets[i].statistics.allocationBytes;
+		snapshot.reserved_bytes += budgets[i].statistics.blockBytes;
+		snapshot.budget_bytes += budgets[i].budget;
+	}
+	snapshot.supported = true;
+	return snapshot;
+}
+
 uint64_t RenderingDeviceDriverVulkan::get_total_memory_used() {
 	const VkPhysicalDeviceMemoryProperties *memory_properties = nullptr;
 	vmaGetMemoryProperties(allocator, &memory_properties);
