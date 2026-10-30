@@ -266,6 +266,39 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				}
 			}
 		} break;
+		case SAVE_MEMORY_CAPTURE_CSV: {
+			Error err;
+			Ref<FileAccess> file = FileAccess::open(p_file, FileAccess::WRITE, &err);
+			if (err != OK) {
+				ERR_PRINT("Failed to open " + p_file);
+				return;
+			}
+			// Export loaded pages only, not a complete process heap dump.
+			file->store_string("Memory capture (loaded pages only),ID," + itos(vmem_capture_id) + "\n");
+			Tree *tables[] = { vmem_alloc_tree, vmem_gpu_alloc_tree, vmem_event_tree };
+			const char *labels[] = { "CPU allocations", "GPU backing allocations", "Allocation event timeline" };
+			for (int table_index = 0; table_index < 3; ++table_index) {
+				Tree *table = tables[table_index];
+				file->store_string(String(labels[table_index]) + "\n");
+				Vector<String> headers;
+				headers.resize(table->get_columns());
+				for (int column = 0; column < table->get_columns(); ++column) {
+					headers.write[column] = table->get_column_title(column);
+				}
+				file->store_csv_line(headers);
+				TreeItem *item = table->get_root() ? table->get_root()->get_first_child() : nullptr;
+				while (item) {
+					Vector<String> values;
+					values.resize(table->get_columns());
+					for (int column = 0; column < table->get_columns(); ++column) {
+						values.write[column] = item->get_text(column);
+					}
+					file->store_csv_line(values);
+					item = item->get_next();
+				}
+				file->store_string("\n");
+			}
+		} break;
 	}
 }
 
@@ -370,6 +403,14 @@ void ScriptEditorDebugger::_video_mem_capture_event_more() {
 	if (vmem_capture_id != 0) {
 		_put_msg("servers:memprof_events", Array{ int64_t(vmem_event_next_sequence), vmem_capture_id });
 	}
+}
+
+void ScriptEditorDebugger::_video_mem_capture_export() {
+	file_dialog->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
+	file_dialog->set_access(EditorFileDialog::ACCESS_FILESYSTEM);
+	file_dialog->clear_filters();
+	file_dialog_purpose = SAVE_MEMORY_CAPTURE_CSV;
+	file_dialog->popup_file_dialog();
 }
 
 void ScriptEditorDebugger::_video_mem_export() {
@@ -2609,6 +2650,10 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_capture_stop = memnew(Button(TTRC("Stop Capture")));
 		capture_bar->add_child(vmem_capture_stop);
 		vmem_capture_stop->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_stop));
+		vmem_capture_export = memnew(Button(TTRC("Export Loaded Capture CSV")));
+		vmem_capture_export->set_tooltip_text(TTRC("Export the pages loaded in the native CPU/GPU allocation and event tables. Other pages are not included."));
+		capture_bar->add_child(vmem_capture_export);
+		vmem_capture_export->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_export));
 		vmem_capture_status = memnew(LineEdit);
 		vmem_capture_status->set_editable(false);
 		vmem_capture_status->set_h_size_flags(SIZE_EXPAND_FILL);
