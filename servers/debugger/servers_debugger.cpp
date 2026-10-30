@@ -417,7 +417,8 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 				int64_t(s.live_allocations), int64_t(s.total_allocations), int64_t(s.dropped_records),
 				int64_t(s.overwritten_events), s.active, s.incomplete, int64_t(s.gpu_allocation_bytes), int64_t(s.gpu_peak_bytes), int64_t(s.gpu_live_allocations), started,
 				int64_t(s.gpu_logical_bytes), int64_t(s.gpu_logical_peak_bytes), int64_t(s.gpu_logical_allocations),
-				int64_t(s.gpu_driver_allocated_bytes), int64_t(s.gpu_reserved_bytes), int64_t(s.gpu_budget_bytes), s.gpu_budget_supported });
+				int64_t(s.gpu_driver_allocated_bytes), int64_t(s.gpu_reserved_bytes), int64_t(s.gpu_budget_bytes), s.gpu_budget_supported,
+				int64_t(Engine::get_singleton()->get_process_frames()) });
 	} else if (p_cmd == "memprof_stop" || p_cmd == "memprof_status") {
 		if (p_cmd == "memprof_stop") {
 			GodotMemoryTracking::stop();
@@ -428,7 +429,8 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 				int64_t(s.live_allocations), int64_t(s.total_allocations), int64_t(s.dropped_records),
 				int64_t(s.overwritten_events), s.active, s.incomplete, int64_t(s.gpu_allocation_bytes), int64_t(s.gpu_peak_bytes), int64_t(s.gpu_live_allocations), true,
 				int64_t(s.gpu_logical_bytes), int64_t(s.gpu_logical_peak_bytes), int64_t(s.gpu_logical_allocations),
-				int64_t(s.gpu_driver_allocated_bytes), int64_t(s.gpu_reserved_bytes), int64_t(s.gpu_budget_bytes), s.gpu_budget_supported });
+				int64_t(s.gpu_driver_allocated_bytes), int64_t(s.gpu_reserved_bytes), int64_t(s.gpu_budget_bytes), s.gpu_budget_supported,
+				int64_t(Engine::get_singleton()->get_process_frames()) });
 	} else if (p_cmd == "memprof_records" || p_cmd == "memprof_gpu_records" || p_cmd == "memprof_gpu_logical_records") {
 		const bool gpu_records = p_cmd == "memprof_gpu_records";
 		const bool logical_records = p_cmd == "memprof_gpu_logical_records";
