@@ -40,6 +40,25 @@ class RenderSceneDataRD : public RenderSceneData {
 	GDCLASS(RenderSceneDataRD, RenderSceneData);
 
 public:
+	enum EnvironmentLightingFlags {
+		ENVIRONMENT_LIGHTING_USE_AMBIENT_LIGHT = 1 << 0,
+		ENVIRONMENT_LIGHTING_USE_AMBIENT_CUBEMAP = 1 << 1,
+		ENVIRONMENT_LIGHTING_USE_REFLECTION_CUBEMAP = 1 << 2,
+	};
+
+	struct EnvironmentLightingState {
+		uint32_t flags = 0;
+		float ambient_light_color_energy[4] = {};
+		float ambient_color_sky_mix = 0.0f;
+		float emissive_exposure_normalization = 1.0f;
+		float ibl_exposure_normalization = 1.0f;
+		float radiance_pixel_size = 0.0f;
+		float radiance_border_size = 0.0f;
+		float radiance_inverse_xform[12] = {};
+	};
+
+	const EnvironmentLightingState &get_environment_lighting_state() const { return environment_lighting_state; }
+
 	bool calculate_motion_vectors = false;
 
 	Transform3D cam_transform;
@@ -100,6 +119,7 @@ public:
 	static uint32_t get_uniform_buffer_size_bytes() { return sizeof(UBODATA); }
 
 private:
+	EnvironmentLightingState environment_lighting_state;
 	RID uniform_buffer; // loaded into this uniform buffer (supplied externally)
 
 	enum SceneDataFlags {

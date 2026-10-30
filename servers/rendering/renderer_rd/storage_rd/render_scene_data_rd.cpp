@@ -304,6 +304,20 @@ void RenderSceneDataRD::update_ubo(RID p_uniform_buffer, RSE::ViewportDebugDraw 
 		prev_ubo.time -= time_step;
 	}
 
+	// Expose the exact environment values sent to the scene UBO to native
+	// Forward+ integrations, without changing the shader-visible UBO layout.
+	environment_lighting_state.flags = 0;
+	environment_lighting_state.flags |= (ubo.flags & SCENE_DATA_FLAGS_USE_AMBIENT_LIGHT) ? ENVIRONMENT_LIGHTING_USE_AMBIENT_LIGHT : 0;
+	environment_lighting_state.flags |= (ubo.flags & SCENE_DATA_FLAGS_USE_AMBIENT_CUBEMAP) ? ENVIRONMENT_LIGHTING_USE_AMBIENT_CUBEMAP : 0;
+	environment_lighting_state.flags |= (ubo.flags & SCENE_DATA_FLAGS_USE_REFLECTION_CUBEMAP) ? ENVIRONMENT_LIGHTING_USE_REFLECTION_CUBEMAP : 0;
+	memcpy(environment_lighting_state.ambient_light_color_energy, ubo.ambient_light_color_energy, sizeof(environment_lighting_state.ambient_light_color_energy));
+	environment_lighting_state.ambient_color_sky_mix = ubo.ambient_color_sky_mix;
+	environment_lighting_state.emissive_exposure_normalization = ubo.emissive_exposure_normalization;
+	environment_lighting_state.ibl_exposure_normalization = ubo.IBL_exposure_normalization;
+	environment_lighting_state.radiance_pixel_size = ubo.radiance_pixel_size;
+	environment_lighting_state.radiance_border_size = ubo.radiance_border_size;
+	memcpy(environment_lighting_state.radiance_inverse_xform, ubo.radiance_inverse_xform, sizeof(environment_lighting_state.radiance_inverse_xform));
+
 	uniform_buffer = p_uniform_buffer;
 	RD::get_singleton()->buffer_update(uniform_buffer, 0, sizeof(UBODATA), &ubo);
 }
