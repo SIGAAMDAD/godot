@@ -21,6 +21,8 @@
 #include "memory_tracker.h"
 
 #include <atomic>
+#include <chrono>
+#include <functional>
 #include <cstdlib>
 #include <mutex>
 #include <new>
@@ -76,6 +78,7 @@ struct State {
 	Event event_ring[EVENT_CAPACITY];
 	std::atomic<uint64_t> capture_id{ 0 };
 	std::atomic<uint64_t> sequence{ 0 };
+	std::atomic<uint64_t> frame_id{ 0 };
 	std::atomic<uint64_t> live_bytes{ 0 };
 	std::atomic<uint64_t> peak_bytes{ 0 };
 	std::atomic<uint64_t> live_allocations{ 0 };
@@ -173,7 +176,12 @@ void write_event(State *p_state, RecordKind p_kind, const Slot &p_record, bool p
 	// event after another producer has already committed it.
 	std::lock_guard<std::mutex> guard(p_state->event_mutex);
 	const uint64_t seq = p_state->sequence.load(std::memory_order_relaxed) + 1;
-	p_state->event_ring[(seq - 1) % EVENT_CAPACITY] = { seq, p_record.allocation_id, p_record.address, p_record.bytes, p_record.category, p_kind, p_gpu, p_record.stack_id };
+	const uint64_t timestamp_us = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count());
+	const uint64_t thread_id = uint64_t(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+	p_state->event_ring[(seq - 1) % EVENT_CAPACITY] = { seq, p_record.allocation_id, p_record.address, p_record.bytes,
+			p_record.category, p_kind, p_gpu, p_record.stack_id, timestamp_us, thread_id,
+			p_state->frame_id.load(std::memory_order_relaxed) };
 	p_state->sequence.store(seq, std::memory_order_release);
 	if (seq > EVENT_CAPACITY) {
 		p_state->overwritten_events.fetch_add(1, std::memory_order_relaxed);
@@ -335,6 +343,7 @@ bool start() {
 		}
 	}
 	p->sequence.store(0, std::memory_order_relaxed);
+	p->frame_id.store(0, std::memory_order_relaxed);
 	p->live_bytes.store(0, std::memory_order_relaxed);
 	p->peak_bytes.store(0, std::memory_order_relaxed);
 	p->live_allocations.store(0, std::memory_order_relaxed);
@@ -538,6 +547,13 @@ void record_realloc(void *p_old_ptr, void *p_new_ptr, size_t p_bytes, bool p_suc
 			add_record(p, (uintptr_t)p_new_ptr, p_bytes, RecordKind::REALLOC);
 		}
 		p->active_hooks.fetch_sub(1, std::memory_order_release);
+	}
+}
+
+void set_frame(uint64_t p_frame) {
+	State *p = state.load(std::memory_order_acquire);
+	if (p) {
+		p->frame_id.store(p_frame, std::memory_order_relaxed);
 	}
 }
 
