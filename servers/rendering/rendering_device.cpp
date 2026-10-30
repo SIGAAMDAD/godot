@@ -32,6 +32,7 @@
 #include "rendering_device.compat.inc"
 
 #include "core/config/engine.h"
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/config/project_settings.h"
 #include "core/io/dir_access.h"
 #include "core/io/file_access.h"
@@ -1684,6 +1685,10 @@ RID RenderingDevice::storage_buffer_create(uint32_t p_size_bytes, Span<uint8_t> 
 	buffer_memory.add(buffer.size);
 
 	RID id = storage_buffer_owner.make_rid(buffer);
+	{
+		GodotMemoryTracking::ScopeCategory scope(GodotMemoryTracking::CATEGORY_RD_LOGICAL_BUFFER);
+		GodotMemoryTracking::record_gpu_logical_alloc((void *)(uintptr_t)id.get_id(), buffer.size);
+	}
 #ifdef DEV_ENABLED
 	set_resource_name(id, "RID:" + itos(id.get_id()));
 #endif
@@ -1722,6 +1727,10 @@ RID RenderingDevice::texture_buffer_create(uint32_t p_size_elements, DataFormat 
 	buffer_memory.add(size_bytes);
 
 	RID id = texture_buffer_owner.make_rid(texture_buffer);
+	{
+		GodotMemoryTracking::ScopeCategory scope(GodotMemoryTracking::CATEGORY_RD_LOGICAL_BUFFER);
+		GodotMemoryTracking::record_gpu_logical_alloc((void *)(uintptr_t)id.get_id(), texture_buffer.size);
+	}
 #ifdef DEV_ENABLED
 	set_resource_name(id, "RID:" + itos(id.get_id()));
 #endif
@@ -1933,6 +1942,10 @@ RID RenderingDevice::texture_create(const TextureFormat &p_format, const Texture
 	texture_memory.add(driver->texture_get_allocation_size(texture.driver_id));
 
 	RID id = texture_owner.make_rid(texture);
+	{
+		GodotMemoryTracking::ScopeCategory scope(GodotMemoryTracking::CATEGORY_RD_LOGICAL_TEXTURE);
+		GodotMemoryTracking::record_gpu_logical_alloc((void *)(uintptr_t)id.get_id(), driver->texture_get_allocation_size(texture.driver_id));
+	}
 #ifdef DEV_ENABLED
 	set_resource_name(id, "RID:" + itos(id.get_id()));
 #endif
@@ -4075,6 +4088,10 @@ RID RenderingDevice::vertex_buffer_create(uint32_t p_size_bytes, Span<uint8_t> p
 	buffer_memory.add(buffer.size);
 
 	RID id = vertex_buffer_owner.make_rid(buffer);
+	{
+		GodotMemoryTracking::ScopeCategory scope(GodotMemoryTracking::CATEGORY_RD_LOGICAL_BUFFER);
+		GodotMemoryTracking::record_gpu_logical_alloc((void *)(uintptr_t)id.get_id(), buffer.size);
+	}
 #ifdef DEV_ENABLED
 	set_resource_name(id, "RID:" + itos(id.get_id()));
 #endif
@@ -4293,6 +4310,10 @@ RID RenderingDevice::index_buffer_create(uint32_t p_index_count, IndexBufferForm
 	buffer_memory.add(index_buffer.size);
 
 	RID id = index_buffer_owner.make_rid(index_buffer);
+	{
+		GodotMemoryTracking::ScopeCategory scope(GodotMemoryTracking::CATEGORY_RD_LOGICAL_BUFFER);
+		GodotMemoryTracking::record_gpu_logical_alloc((void *)(uintptr_t)id.get_id(), index_buffer.size);
+	}
 #ifdef DEV_ENABLED
 	set_resource_name(id, "RID:" + itos(id.get_id()));
 #endif
@@ -4559,6 +4580,10 @@ RID RenderingDevice::uniform_buffer_create(uint32_t p_size_bytes, Span<uint8_t> 
 	buffer_memory.add(buffer.size);
 
 	RID id = uniform_buffer_owner.make_rid(buffer);
+	{
+		GodotMemoryTracking::ScopeCategory scope(GodotMemoryTracking::CATEGORY_RD_LOGICAL_BUFFER);
+		GodotMemoryTracking::record_gpu_logical_alloc((void *)(uintptr_t)id.get_id(), buffer.size);
+	}
 #ifdef DEV_ENABLED
 	set_resource_name(id, "RID:" + itos(id.get_id()));
 #endif
@@ -7892,6 +7917,7 @@ void RenderingDevice::_free_internal(RID p_id) {
 		}
 
 		frames[frame].textures_to_dispose_of.push_back(*texture);
+		GodotMemoryTracking::record_gpu_logical_free((void *)(uintptr_t)p_id.get_id());
 		texture_owner.free(p_id);
 	} else if (framebuffer_owner.owns(p_id)) {
 		Framebuffer *framebuffer = framebuffer_owner.get_or_null(p_id);
@@ -7912,6 +7938,7 @@ void RenderingDevice::_free_internal(RID p_id) {
 
 		RDG::resource_tracker_free(vertex_buffer->draw_tracker);
 		frames[frame].buffers_to_dispose_of.push_back(*vertex_buffer);
+		GodotMemoryTracking::record_gpu_logical_free((void *)(uintptr_t)p_id.get_id());
 		vertex_buffer_owner.free(p_id);
 	} else if (vertex_array_owner.owns(p_id)) {
 		vertex_array_owner.free(p_id);
@@ -7921,6 +7948,7 @@ void RenderingDevice::_free_internal(RID p_id) {
 
 		RDG::resource_tracker_free(index_buffer->draw_tracker);
 		frames[frame].buffers_to_dispose_of.push_back(*index_buffer);
+		GodotMemoryTracking::record_gpu_logical_free((void *)(uintptr_t)p_id.get_id());
 		index_buffer_owner.free(p_id);
 	} else if (index_array_owner.owns(p_id)) {
 		index_array_owner.free(p_id);
@@ -7936,6 +7964,7 @@ void RenderingDevice::_free_internal(RID p_id) {
 
 		RDG::resource_tracker_free(uniform_buffer->draw_tracker);
 		frames[frame].buffers_to_dispose_of.push_back(*uniform_buffer);
+		GodotMemoryTracking::record_gpu_logical_free((void *)(uintptr_t)p_id.get_id());
 		uniform_buffer_owner.free(p_id);
 	} else if (texture_buffer_owner.owns(p_id)) {
 		Buffer *texture_buffer = texture_buffer_owner.get_or_null(p_id);
@@ -7943,6 +7972,7 @@ void RenderingDevice::_free_internal(RID p_id) {
 
 		RDG::resource_tracker_free(texture_buffer->draw_tracker);
 		frames[frame].buffers_to_dispose_of.push_back(*texture_buffer);
+		GodotMemoryTracking::record_gpu_logical_free((void *)(uintptr_t)p_id.get_id());
 		texture_buffer_owner.free(p_id);
 	} else if (storage_buffer_owner.owns(p_id)) {
 		Buffer *storage_buffer = storage_buffer_owner.get_or_null(p_id);
@@ -7950,6 +7980,7 @@ void RenderingDevice::_free_internal(RID p_id) {
 
 		RDG::resource_tracker_free(storage_buffer->draw_tracker);
 		frames[frame].buffers_to_dispose_of.push_back(*storage_buffer);
+		GodotMemoryTracking::record_gpu_logical_free((void *)(uintptr_t)p_id.get_id());
 		storage_buffer_owner.free(p_id);
 	} else if (uniform_set_owner.owns(p_id)) {
 		UniformSet *uniform_set = uniform_set_owner.get_or_null(p_id);
