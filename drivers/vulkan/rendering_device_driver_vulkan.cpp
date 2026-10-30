@@ -32,6 +32,7 @@
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/os/os.h"
 #include "core/templates/fixed_vector.h"
 #include "drivers/vulkan/vulkan_hooks.h"
@@ -2249,6 +2250,7 @@ RDD::BufferID RenderingDeviceDriverVulkan::buffer_create(uint64_t p_size, BitFie
 	buf_info->allocation.handle = allocation;
 	buf_info->allocation.size = alloc_info.size;
 	buf_info->size = original_size;
+	GodotMemoryTracking::record_gpu_alloc(allocation, alloc_info.size);
 
 	return BufferID(buf_info);
 }
@@ -2272,6 +2274,7 @@ bool RenderingDeviceDriverVulkan::buffer_set_texel_format(BufferID p_buffer, Dat
 
 void RenderingDeviceDriverVulkan::buffer_free(BufferID p_buffer) {
 	BufferInfo *buf_info = (BufferInfo *)p_buffer.id;
+	GodotMemoryTracking::record_gpu_free(buf_info->allocation.handle);
 	if (buf_info->vk_view) {
 		vkDestroyBufferView(vk_device, buf_info->vk_view, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_BUFFER_VIEW));
 	}
@@ -2636,6 +2639,7 @@ RDD::TextureID RenderingDeviceDriverVulkan::texture_create(const TextureFormat &
 	tex_info->transient = (p_format.usage_bits & TEXTURE_USAGE_TRANSIENT_BIT) != 0;
 #endif
 	vmaGetAllocationInfo(allocator, tex_info->allocation.handle, &tex_info->allocation.info);
+	GodotMemoryTracking::record_gpu_alloc(allocation, tex_info->allocation.info.size);
 
 #if PRINT_NATIVE_COMMANDS
 	print_line(vformat("vkCreateImageView: 0x%uX for 0x%uX", uint64_t(vk_image_view), uint64_t(vk_image)));
@@ -2795,6 +2799,7 @@ void RenderingDeviceDriverVulkan::texture_free(TextureID p_texture) {
 	TextureInfo *tex_info = (TextureInfo *)p_texture.id;
 	vkDestroyImageView(vk_device, tex_info->vk_view, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_IMAGE_VIEW));
 	if (tex_info->allocation.handle) {
+		GodotMemoryTracking::record_gpu_free(tex_info->allocation.handle);
 		if (!Engine::get_singleton()->is_extra_gpu_memory_tracking_enabled()) {
 			vmaDestroyImage(allocator, tex_info->vk_view_create_info.image, tex_info->allocation.handle);
 		} else {
