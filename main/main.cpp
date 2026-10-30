@@ -55,6 +55,7 @@
 #include "core/os/process_id.h"
 #include "core/os/time.h"
 #include "core/profiling/profiling.h"
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/register_core_types.h"
 #include "core/string/translation_server.h"
 #include "core/variant/variant_parser.h"
@@ -5032,6 +5033,7 @@ bool Main::iteration() {
 	GodotProfileZone("Main::iteration");
 	GodotProfileZoneGroupedFirst(_profile_zone, "prepare");
 	iterating++;
+	GodotMemoryTracking::set_frame(Engine::get_singleton()->get_process_frames());
 
 	const uint64_t ticks = OS::get_singleton()->get_ticks_usec();
 	Engine::get_singleton()->_frame_ticks = ticks;
