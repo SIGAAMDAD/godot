@@ -112,6 +112,28 @@ private:
 	Tree *variables = nullptr;
 	HSplitContainer *h_split = nullptr;
 
+	struct MemorySample {
+		uint64_t capture_id = 0;
+		uint64_t frame_id = 0;
+		uint64_t timestamp_us = 0;
+		double cpu_live_bytes = 0;
+		double gpu_backing_bytes = 0;
+		double gpu_logical_bytes = 0;
+		double allocation_rate = 0;
+		double event_drops = 0;
+	};
+	Vector<MemorySample> remote_memory_samples;
+	Vector<MemorySample> editor_memory_samples;
+	uint64_t last_editor_memory_sample_us = 0;
+	uint64_t remote_last_allocation_total = 0;
+	uint64_t editor_last_allocation_total = 0;
+	OptionButton *memory_source = nullptr;
+	OptionButton *memory_metric = nullptr;
+	Control *memory_graph = nullptr;
+	Label *memory_graph_value = nullptr;
+	void _draw_memory_graph();
+	void _memory_graph_changed(int p_selection);
+
 	HashSet<StringName> plot_sigs;
 	HashSet<StringName> collapsed_categories;
 
@@ -174,6 +196,8 @@ protected:
 
 public:
 	void add_frame_metric(const Metric &p_metric, bool p_final = false);
+	void add_remote_memory_sample(uint64_t p_capture, uint64_t p_frame, uint64_t p_cpu,
+			uint64_t p_gpu_backing, uint64_t p_gpu_logical, uint64_t p_total_allocations, uint64_t p_event_drops);
 	void set_enabled(bool p_enable, bool p_clear = true);
 	void set_profiling(bool p_pressed);
 	bool is_profiling();
