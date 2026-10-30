@@ -162,6 +162,17 @@ private:
 	Button *vmem_trace_import = nullptr;
 	PackedByteArray vmem_trace_payload;
 	String vmem_trace_export_path;
+	HashMap<uint64_t, int64_t> vmem_trace_current_bytes;
+	HashMap<uint64_t, int64_t> vmem_trace_current_count;
+	HashMap<uint64_t, int64_t> vmem_trace_baseline_bytes;
+	HashMap<uint64_t, int64_t> vmem_trace_baseline_count;
+	int64_t vmem_trace_current_id = 0;
+	int64_t vmem_trace_baseline_id = 0;
+	bool vmem_trace_current_valid = false;
+	bool vmem_trace_baseline_valid = false;
+	Button *vmem_trace_pin = nullptr;
+	Button *vmem_trace_compare = nullptr;
+	Tree *vmem_trace_diff_tree = nullptr;
 	int64_t vmem_trace_requested_capture = 0;
 	int64_t vmem_capture_id = 0;
 	int64_t vmem_alloc_next_offset = 0;
@@ -287,6 +298,8 @@ private:
 	void _video_mem_capture_export();
 	void _video_mem_trace_export();
 	void _video_mem_trace_import();
+	void _video_mem_trace_pin_baseline();
+	void _video_mem_trace_compare();
 	void _video_mem_export();
 
 	void _resources_reimported(const PackedStringArray &p_resources);
