@@ -35,6 +35,7 @@
 #include "core/debugger/remote_debugger.h"
 #include "core/input/input.h"
 #include "core/io/resource_loader.h"
+#include "core/memory_tracking/memory_trace.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/os/os.h"
@@ -299,6 +300,111 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				file->store_string("\n");
 			}
 		} break;
+		case SAVE_MEMORY_CAPTURE_TRACE: {
+			if (vmem_capture_id == 0 || vmem_trace_requested_capture != 0) {
+				vmem_capture_status->set_text(TTR("Stop an active capture before exporting a native trace."));
+				return;
+			}
+			vmem_trace_export_path = p_file;
+			vmem_trace_requested_capture = vmem_capture_id;
+			vmem_trace_payload.clear();
+			vmem_capture_status->set_text(TTR("Transferring stopped native trace..."));
+			_put_msg("servers:memprof_trace_chunk", Array{ vmem_capture_id, int64_t(0) });
+		} break;
+		case OPEN_MEMORY_CAPTURE_TRACE: {
+			Error err;
+			Ref<FileAccess> file = FileAccess::open(p_file, FileAccess::READ, &err);
+			if (err != OK || file.is_null() || file->get_length() > 32 * 1024 * 1024 ||
+					file->get_length() < 52 + 24 + 100) {
+				vmem_capture_status->set_text(TTR("Cannot open trace or file exceeds the 32 MiB limit."));
+				return;
+			}
+			PackedByteArray data;
+			data.resize(int(file->get_length()));
+			if (file->get_buffer(data.ptrw(), data.size()) != uint64_t(data.size()) ||
+					!GodotMemoryTracking::read_trace(data.ptr(), data.size(), GodotMemoryTracking::TraceVisitor())) {
+				vmem_capture_status->set_text(TTR("Trace rejected: invalid version, bounds, CRC or footer."));
+				return;
+			}
+			struct ImportedRows {
+				Vector<GodotMemoryTracking::Record> cpu;
+				Vector<GodotMemoryTracking::Record> gpu;
+				Vector<GodotMemoryTracking::Event> events;
+				GodotMemoryTracking::Summary summary;
+				bool summary_seen = false;
+			} imported;
+			GodotMemoryTracking::TraceVisitor visitor;
+			visitor.userdata = &imported;
+			visitor.on_record = [](const GodotMemoryTracking::Record &p_record, bool p_gpu, void *p_user) -> bool {
+				ImportedRows *rows = static_cast<ImportedRows *>(p_user);
+				if (p_gpu) {
+					rows->gpu.push_back(p_record);
+				} else {
+					rows->cpu.push_back(p_record);
+				}
+				return rows->cpu.size() <= 131072 && rows->gpu.size() <= 131072;
+			};
+			visitor.on_event = [](const GodotMemoryTracking::Event &p_event, void *p_user) -> bool {
+				ImportedRows *rows = static_cast<ImportedRows *>(p_user);
+				rows->events.push_back(p_event);
+				return rows->events.size() <= 16384;
+			};
+			visitor.on_summary = [](const GodotMemoryTracking::Summary &p_summary, void *p_user) -> bool {
+				ImportedRows *rows = static_cast<ImportedRows *>(p_user);
+				rows->summary = p_summary;
+				rows->summary_seen = true;
+				return true;
+			};
+			if (!GodotMemoryTracking::read_trace(data.ptr(), data.size(), visitor) || !imported.summary_seen) {
+				vmem_capture_status->set_text(TTR("Trace rejected: invalid data records."));
+				return;
+			}
+			vmem_capture_id = int64_t(imported.summary.capture_id);
+			vmem_alloc_tree->clear();
+			vmem_gpu_alloc_tree->clear();
+			vmem_event_tree->clear();
+			TreeItem *cpu_root = vmem_alloc_tree->create_item();
+			TreeItem *gpu_root = vmem_gpu_alloc_tree->create_item();
+			TreeItem *event_root = vmem_event_tree->create_item();
+			// Display is virtualized to bounded initial pages, while the codec
+			// validates and retains the complete stopped-capture trace.
+			for (int i = 0; i < MIN(imported.cpu.size(), 1024); ++i) {
+				const GodotMemoryTracking::Record &record = imported.cpu[i];
+				TreeItem *row = vmem_alloc_tree->create_item(cpu_root);
+				row->set_text(0, itos(int64_t(record.allocation_id)));
+				row->set_text(1, TTR("Omitted from trace"));
+				row->set_text(2, String::humanize_size(record.bytes));
+				row->set_text(3, itos(record.category));
+				row->set_text(4, itos(record.generation));
+			}
+			for (int i = 0; i < MIN(imported.gpu.size(), 1024); ++i) {
+				const GodotMemoryTracking::Record &record = imported.gpu[i];
+				TreeItem *row = vmem_gpu_alloc_tree->create_item(gpu_root);
+				row->set_text(0, itos(int64_t(record.allocation_id)));
+				row->set_text(1, TTR("Omitted from trace"));
+				row->set_text(2, String::humanize_size(record.bytes));
+				row->set_text(3, itos(record.category));
+				row->set_text(4, itos(record.generation));
+			}
+			for (int i = 0; i < MIN(imported.events.size(), 2048); ++i) {
+				const GodotMemoryTracking::Event &event = imported.events[i];
+				TreeItem *row = vmem_event_tree->create_item(event_root);
+				row->set_text(0, itos(int64_t(event.sequence)));
+				row->set_text(1, itos(int64_t(event.allocation_id)));
+				row->set_text(2, TTR("Omitted from trace"));
+				row->set_text(3, String::humanize_size(event.bytes));
+				row->set_text(4, itos(event.category));
+				row->set_text(5, event.kind == GodotMemoryTracking::RecordKind::ALLOC ? TTR("Alloc") :
+						event.kind == GodotMemoryTracking::RecordKind::FREE ? TTR("Free") : TTR("Realloc"));
+				row->set_text(6, event.gpu ? TTR("GPU") : TTR("CPU"));
+			}
+			vmem_alloc_more->set_disabled(true);
+			vmem_gpu_alloc_more->set_disabled(true);
+			vmem_event_more->set_disabled(true);
+			vmem_capture_status->set_text(vformat("Imported capture %d: %d CPU, %d GPU, %d events%s",
+					vmem_capture_id, imported.cpu.size(), imported.gpu.size(), imported.events.size(),
+					imported.summary.incomplete ? TTR(" (incomplete history)") : String()));
+		} break;
 	}
 }
 
@@ -373,6 +479,9 @@ void ScriptEditorDebugger::_video_mem_request() {
 
 void ScriptEditorDebugger::_video_mem_capture_start() {
 	vmem_capture_id = 0;
+	vmem_trace_requested_capture = 0;
+	vmem_trace_payload.clear();
+	vmem_trace_export_path.clear();
 	vmem_alloc_next_offset = 0;
 	vmem_gpu_alloc_next_offset = 0;
 	vmem_event_next_sequence = 1;
@@ -403,6 +512,24 @@ void ScriptEditorDebugger::_video_mem_capture_event_more() {
 	if (vmem_capture_id != 0) {
 		_put_msg("servers:memprof_events", Array{ int64_t(vmem_event_next_sequence), vmem_capture_id });
 	}
+}
+
+void ScriptEditorDebugger::_video_mem_trace_export() {
+	file_dialog->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
+	file_dialog->set_access(EditorFileDialog::ACCESS_FILESYSTEM);
+	file_dialog->clear_filters();
+	file_dialog->add_filter("*.gdmemtrace", "Godot Memory Trace");
+	file_dialog_purpose = SAVE_MEMORY_CAPTURE_TRACE;
+	file_dialog->popup_file_dialog();
+}
+
+void ScriptEditorDebugger::_video_mem_trace_import() {
+	file_dialog->set_file_mode(EditorFileDialog::FILE_MODE_OPEN_FILE);
+	file_dialog->set_access(EditorFileDialog::ACCESS_FILESYSTEM);
+	file_dialog->clear_filters();
+	file_dialog->add_filter("*.gdmemtrace", "Godot Memory Trace");
+	file_dialog_purpose = OPEN_MEMORY_CAPTURE_TRACE;
+	file_dialog->popup_file_dialog();
 }
 
 void ScriptEditorDebugger::_video_mem_capture_export() {
@@ -711,6 +838,57 @@ void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, con
 	}
 	// An empty page may simply mean no new events yet.
 	vmem_event_more->set_disabled(false);
+}
+
+void ScriptEditorDebugger::_msg_servers_memprof_trace_chunk(uint64_t p_thread_id, const Array &p_data) {
+	if (p_data.size() != 5 || vmem_trace_export_path.is_empty() ||
+			p_data[0].get_type() != Variant::INT || int64_t(p_data[0]) != vmem_trace_requested_capture ||
+			p_data[1].get_type() != Variant::INT || int64_t(p_data[1]) != vmem_trace_payload.size() ||
+			p_data[2].get_type() != Variant::PACKED_BYTE_ARRAY || p_data[3].get_type() != Variant::INT ||
+			p_data[4].get_type() != Variant::BOOL) {
+		return;
+	}
+	const PackedByteArray chunk = p_data[2];
+	const int64_t total_size = p_data[3];
+	if (total_size > 32 * 1024 * 1024 || total_size < 52 + 24 + 100 ||
+			chunk.size() > 32 * 1024 || vmem_trace_payload.size() + chunk.size() > total_size) {
+		vmem_capture_status->set_text(TTR("Trace transfer rejected: invalid bounds."));
+		vmem_trace_export_path.clear();
+		vmem_trace_requested_capture = 0;
+		vmem_trace_payload.clear();
+		return;
+	}
+	vmem_trace_payload.append_array(chunk);
+	if (!bool(p_data[4])) {
+		_put_msg("servers:memprof_trace_chunk", Array{ vmem_trace_requested_capture, int64_t(vmem_trace_payload.size()) });
+		return;
+	}
+	if (vmem_trace_payload.size() != total_size ||
+			!GodotMemoryTracking::read_trace(vmem_trace_payload.ptr(), vmem_trace_payload.size(), GodotMemoryTracking::TraceVisitor())) {
+		vmem_capture_status->set_text(TTR("Trace transfer rejected: invalid CRC or footer."));
+	} else {
+		Error err;
+		Ref<FileAccess> file = FileAccess::open(vmem_trace_export_path, FileAccess::WRITE, &err);
+		if (err == OK && file.is_valid()) {
+			file->store_buffer(vmem_trace_payload.ptr(), vmem_trace_payload.size());
+			vmem_capture_status->set_text(vformat("Saved native trace (%d bytes)", vmem_trace_payload.size()));
+		} else {
+			vmem_capture_status->set_text(TTR("Failed to save native memory trace."));
+		}
+	}
+	vmem_trace_payload.clear();
+	vmem_trace_export_path.clear();
+	vmem_trace_requested_capture = 0;
+}
+
+void ScriptEditorDebugger::_msg_servers_memprof_trace_error(uint64_t p_thread_id, const Array &p_data) {
+	if (p_data.size() >= 2 && p_data[0].get_type() == Variant::INT &&
+			int64_t(p_data[0]) == vmem_trace_requested_capture) {
+		vmem_capture_status->set_text(String(p_data[1]));
+		vmem_trace_requested_capture = 0;
+		vmem_trace_export_path.clear();
+		vmem_trace_payload.clear();
+	}
 }
 
 void ScriptEditorDebugger::_msg_servers_drawn(uint64_t p_thread_id, const Array &p_data) {
@@ -1227,6 +1405,8 @@ void ScriptEditorDebugger::_init_parse_message_handlers() {
 	parse_message_handlers["servers:memprof_records"] = &ScriptEditorDebugger::_msg_servers_memprof_records;
 	parse_message_handlers["servers:memprof_gpu_records"] = &ScriptEditorDebugger::_msg_servers_memprof_gpu_records;
 	parse_message_handlers["servers:memprof_events"] = &ScriptEditorDebugger::_msg_servers_memprof_events;
+	parse_message_handlers["servers:memprof_trace_chunk"] = &ScriptEditorDebugger::_msg_servers_memprof_trace_chunk;
+	parse_message_handlers["servers:memprof_trace_error"] = &ScriptEditorDebugger::_msg_servers_memprof_trace_error;
 	parse_message_handlers["servers:drawn"] = &ScriptEditorDebugger::_msg_servers_drawn;
 	parse_message_handlers["stack_dump"] = &ScriptEditorDebugger::_msg_stack_dump;
 	parse_message_handlers["stack_frame_vars"] = &ScriptEditorDebugger::_msg_stack_frame_vars;
@@ -2654,6 +2834,12 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_capture_export->set_tooltip_text(TTRC("Export the pages loaded in the native CPU/GPU allocation and event tables. Other pages are not included."));
 		capture_bar->add_child(vmem_capture_export);
 		vmem_capture_export->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_export));
+		vmem_trace_export = memnew(Button(TTRC("Export Native Trace")));
+		vmem_trace_export->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_trace_export));
+		capture_bar->add_child(vmem_trace_export);
+		vmem_trace_import = memnew(Button(TTRC("Open Native Trace")));
+		vmem_trace_import->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_trace_import));
+		capture_bar->add_child(vmem_trace_import);
 		vmem_capture_status = memnew(LineEdit);
 		vmem_capture_status->set_editable(false);
 		vmem_capture_status->set_h_size_flags(SIZE_EXPAND_FILL);
