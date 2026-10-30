@@ -75,6 +75,10 @@ struct Summary {
 	uint64_t gpu_logical_bytes = 0;
 	uint64_t gpu_logical_peak_bytes = 0;
 	uint64_t gpu_logical_allocations = 0;
+	uint64_t gpu_driver_allocated_bytes = 0;
+	uint64_t gpu_reserved_bytes = 0;
+	uint64_t gpu_budget_bytes = 0;
+	bool gpu_budget_supported = false;
 	bool active = false;
 	bool incomplete = false;
 };
@@ -100,6 +104,7 @@ void record_gpu_alloc(void *p_allocation, size_t p_bytes);
 void record_gpu_free(void *p_allocation);
 void record_gpu_logical_alloc(void *p_rid, size_t p_bytes);
 void record_gpu_logical_free(void *p_rid);
+void publish_gpu_budget(uint64_t p_allocated, uint64_t p_reserved, uint64_t p_budget, bool p_supported);
 
 void record_alloc(void *p_ptr, size_t p_bytes);
 void record_free(void *p_ptr);
