@@ -35,6 +35,9 @@
 #include "core/os/os.h"
 
 #include <drivers/vulkan/godot_vulkan.h>
+#ifdef STREAMLINE_ENABLED
+#include "drivers/streamline/streamline_runtime.h"
+#endif
 
 const char *RenderingContextDriverVulkanWindows::_get_platform_surface_extension() const {
 	return VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
@@ -60,7 +63,19 @@ RenderingContextDriver::SurfaceID RenderingContextDriverVulkanWindows::surface_c
 	create_info.hwnd = wpd->window;
 
 	VkSurfaceKHR vk_surface = VK_NULL_HANDLE;
-	VkResult err = vkCreateWin32SurfaceKHR(instance_get(), &create_info, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR), &vk_surface);
+	PFN_vkCreateWin32SurfaceKHR create_surface = vkCreateWin32SurfaceKHR;
+#ifdef STREAMLINE_ENABLED
+	if (StreamlineRuntime::get().is_initialized()) {
+		PFN_vkGetInstanceProcAddr proxy_get = StreamlineRuntime::get().get_vulkan_instance_proc_addr();
+		if (proxy_get) {
+			PFN_vkCreateWin32SurfaceKHR proxy_create = (PFN_vkCreateWin32SurfaceKHR)proxy_get(instance_get(), "vkCreateWin32SurfaceKHR");
+			if (proxy_create != nullptr) {
+				create_surface = proxy_create;
+			}
+		}
+	}
+#endif
+	VkResult err = create_surface(instance_get(), &create_info, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR), &vk_surface);
 	ERR_FAIL_COND_V(err != VK_SUCCESS, SurfaceID());
 
 	Surface *surface = memnew(Surface);

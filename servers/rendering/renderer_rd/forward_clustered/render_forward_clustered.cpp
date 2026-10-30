@@ -54,6 +54,40 @@ using namespace RendererSceneRenderImplementation;
 
 #define FADE_ALPHA_PASS_THRESHOLD 0.999
 
+static_assert(sizeof(RID) == sizeof(uint64_t), "The Terrain3D bridge requires 64-bit RID handles.");
+
+
+static _FORCE_INLINE_ void _terrain3d_store_transform(const Transform3D &p_transform, float *r_values) {
+	r_values[0] = p_transform.basis.rows[0][0];
+	r_values[1] = p_transform.basis.rows[0][1];
+	r_values[2] = p_transform.basis.rows[0][2];
+	r_values[3] = p_transform.origin.x;
+	r_values[4] = p_transform.basis.rows[1][0];
+	r_values[5] = p_transform.basis.rows[1][1];
+	r_values[6] = p_transform.basis.rows[1][2];
+	r_values[7] = p_transform.origin.y;
+	r_values[8] = p_transform.basis.rows[2][0];
+	r_values[9] = p_transform.basis.rows[2][1];
+	r_values[10] = p_transform.basis.rows[2][2];
+	r_values[11] = p_transform.origin.z;
+}
+
+static _FORCE_INLINE_ void _terrain3d_store_projection(const Projection &p_projection, float *r_values) {
+	for (uint32_t column = 0; column < 4; column++) {
+		for (uint32_t row = 0; row < 4; row++) {
+			r_values[column * 4 + row] = p_projection.columns[column][row];
+		}
+	}
+}
+
+static _FORCE_INLINE_ uint64_t _terrain3d_bridge_rid(RID p_rid) {
+	uint64_t result = 0;
+	static_assert(sizeof(result) == sizeof(p_rid));
+	memcpy(&result, &p_rid, sizeof(result));
+	return result;
+}
+
+
 void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_specular() {
 	ERR_FAIL_NULL(render_buffers);
 
@@ -96,6 +130,56 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_fsr2(Rende
 	}
 }
 
+#ifdef STREAMLINE_ENABLED
+bool RenderForwardClustered::RenderBufferDataForwardClustered::ensure_dlss(RendererRD::DLSSEffect *p_effect, uint32_t p_views) {
+	if (dlss_contexts.size() != (int)p_views) {
+		for (RendererRD::DLSSContext *context : dlss_contexts) {
+			if (context) {
+				memdelete(context);
+			}
+		}
+		dlss_contexts.resize(p_views);
+		for (uint32_t v = 0; v < p_views; v++) {
+			dlss_contexts.write[v] = nullptr;
+		}
+	}
+	for (uint32_t v = 0; v < p_views; ++v) {
+		if (!dlss_contexts[v]) {
+			dlss_contexts.write[v] = p_effect->create_context(render_buffers->get_internal_size(), render_buffers->get_target_size());
+		}
+		if (!dlss_contexts[v] || dlss_contexts[v]->execution_failed.load()) {
+			return false;
+		}
+	}
+	return true;
+}
+#endif
+
+#ifdef XESS_ENABLED
+bool RenderForwardClustered::RenderBufferDataForwardClustered::ensure_xess(RendererRD::XeSSEffect *p_effect, uint32_t p_view_count) {
+	if (xess_contexts.size() != (int)p_view_count) {
+		for (RendererRD::XeSSScalerContext *ctx : xess_contexts) {
+			if (ctx != nullptr) {
+				memdelete(ctx);
+			}
+		}
+		xess_contexts.resize(p_view_count);
+		for (uint32_t v = 0; v < p_view_count; v++) {
+			xess_contexts.write[v] = nullptr;
+		}
+	}
+	for (uint32_t v = 0; v < p_view_count; v++) {
+		if (xess_contexts[v] == nullptr) {
+			xess_contexts.write[v] = p_effect->create_context(render_buffers->get_internal_size(), render_buffers->get_target_size());
+		}
+		if (xess_contexts[v] == nullptr || xess_contexts[v]->execution_failed.load()) {
+			return false;
+		}
+	}
+	return true;
+}
+#endif
+
 #ifdef METAL_MFXTEMPORAL_ENABLED
 bool RenderForwardClustered::RenderBufferDataForwardClustered::ensure_mfx_temporal(RendererRD::MFXTemporalEffect *p_effect) {
 	if (mfx_temporal_context == nullptr) {
@@ -116,6 +200,25 @@ bool RenderForwardClustered::RenderBufferDataForwardClustered::ensure_mfx_tempor
 #endif
 
 void RenderForwardClustered::RenderBufferDataForwardClustered::free_data() {
+	terrain3d_previous_depth_valid = false;
+	// Vendor SDK contexts can retain references to the render buffer textures.
+	// Drain and retire them before clearing native render-buffer resources.
+#ifdef XESS_ENABLED
+	for (RendererRD::XeSSScalerContext *ctx : xess_contexts) {
+		if (ctx != nullptr) {
+			memdelete(ctx);
+		}
+	}
+	xess_contexts.clear();
+#endif
+#ifdef STREAMLINE_ENABLED
+	for (RendererRD::DLSSContext *ctx : dlss_contexts) {
+		if (ctx) {
+			memdelete(ctx);
+		}
+	}
+	dlss_contexts.clear();
+#endif
 	// JIC, should already have been cleared
 	if (render_buffers) {
 		render_buffers->clear_context(RB_SCOPE_FORWARD_CLUSTERED);
@@ -149,6 +252,7 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::free_data() {
 }
 
 void RenderForwardClustered::RenderBufferDataForwardClustered::configure(RenderSceneBuffersRD *p_render_buffers) {
+	terrain3d_previous_depth_valid = false;
 	if (render_buffers) {
 		// JIC
 		free_data();
@@ -689,11 +793,228 @@ void RenderForwardClustered::_render_list(RenderingDevice::DrawListID p_draw_lis
 	}
 }
 
-void RenderForwardClustered::_render_list_with_draw_list(RenderListParameters *p_params, RID p_framebuffer, BitField<RD::DrawFlags> p_draw_flags, const Vector<Color> &p_clear_color_values, float p_clear_depth_value, uint32_t p_clear_stencil_value, const Rect2 &p_region) {
+void RenderForwardClustered::_terrain3d_bridge_begin_frame(const RenderDataRD *p_render_data, const Size2i &p_screen_size, uint32_t p_sample_count, bool p_is_reflection_probe) {
+	ERR_FAIL_NULL(p_render_data);
+	ERR_FAIL_NULL(p_render_data->scene_data);
+
+	Terrain3DForwardPlusBridge *const bridge = Terrain3DForwardPlusBridge::get_singleton();
+	const Terrain3DForwardPlusBridge::RenderThreadHandle callback_handle = bridge != nullptr ? bridge->acquire_render_thread_handle() : 0;
+	if (callback_handle != terrain3d_bridge_callback_handle) {
+		// A new native callback owns no borrowed-resource cache yet. Force the next
+		// ordinary pass to republish the complete resource packet. The retired old
+		// callback remains alive until the extension synchronizes the render thread.
+		terrain3d_bridge_resources = {};
+		terrain3d_bridge_resources_pending = callback_handle != 0;
+	}
+	terrain3d_bridge_callback_handle = callback_handle;
+	if (callback_handle == 0) {
+		terrain3d_bridge_frame_valid = false;
+		terrain3d_bridge_frame_pending = false;
+		terrain3d_bridge_resources_ready = false;
+		terrain3d_bridge_depth_prepass_active = false;
+		return;
+	}
+
+	const RenderSceneDataRD *scene_data = p_render_data->scene_data;
+	const uint64_t viewport_key = p_is_reflection_probe ? p_render_data->reflection_probe.get_id() : p_render_data->render_buffers->get_render_target().get_id();
+	terrain3d_bridge_frame_generation++;
+	if (terrain3d_bridge_frame_generation == 0) {
+		terrain3d_bridge_frame_generation = 1;
+	}
+
+	t3dBridgeFrame frame = {};
+	frame.abi_version = T3D_FORWARD_BRIDGE_ABI;
+	frame.struct_size = sizeof(t3dBridgeFrame);
+	frame.generation = terrain3d_bridge_frame_generation;
+	frame.flags = scene_data->calculate_motion_vectors ? T3D_BRIDGE_FRAME_MOTION_VECTORS : 0;
+	frame.view_count = MIN(scene_data->view_count, T3D_FORWARD_MAX_VIEWS);
+	frame.render_frame = RSG::rasterizer->get_frame_number();
+	frame.scene_pass = get_scene_pass();
+	frame.viewport_key = viewport_key;
+	frame.camera_visible_layers = scene_data->camera_visible_layers;
+	frame.sample_count = p_sample_count;
+
+	Rect2i render_region = p_render_data->render_region;
+	if (render_region.size.x <= 0 || render_region.size.y <= 0) {
+		render_region = Rect2i(Point2i(), p_screen_size);
+	}
+	frame.render_region[0] = render_region.position.x;
+	frame.render_region[1] = render_region.position.y;
+	frame.render_region[2] = render_region.size.x;
+	frame.render_region[3] = render_region.size.y;
+	frame.render_size[0] = p_screen_size.x;
+	frame.render_size[1] = p_screen_size.y;
+
+	_terrain3d_store_transform(scene_data->cam_transform, frame.camera_transform);
+	const Projection current_view(scene_data->cam_transform.affine_inverse());
+	const Projection previous_view(scene_data->prev_cam_transform.affine_inverse());
+	Projection current_correction;
+	current_correction.set_depth_correction(scene_data->flip_y);
+	current_correction.add_jitter_offset(scene_data->taa_jitter);
+	Projection previous_correction;
+	previous_correction.set_depth_correction(scene_data->flip_y);
+	previous_correction.add_jitter_offset(scene_data->prev_taa_jitter);
+	for (uint32_t view = 0; view < frame.view_count; view++) {
+		_terrain3d_store_projection((current_correction * scene_data->view_projection[view]) * current_view, frame.view_projection[view]);
+		_terrain3d_store_projection((previous_correction * scene_data->prev_view_projection[view]) * previous_view, frame.previous_view_projection[view]);
+		frame.eye_offset[view][0] = scene_data->view_eye_offset[view].x;
+		frame.eye_offset[view][1] = scene_data->view_eye_offset[view].y;
+		frame.eye_offset[view][2] = scene_data->view_eye_offset[view].z;
+	}
+	frame.motion_jitter[0] = scene_data->taa_jitter.x;
+	frame.motion_jitter[1] = scene_data->taa_jitter.y;
+	frame.motion_jitter[2] = scene_data->prev_taa_jitter.x;
+	frame.motion_jitter[3] = scene_data->prev_taa_jitter.y;
+	frame.camera_z_near = scene_data->z_near;
+	frame.camera_z_far = scene_data->z_far;
+	frame.reflection_atlas_border_size = scene_data->reflection_atlas_border_size.x;
+	frame.cluster_shift = scene_state.ubo.cluster_shift;
+	frame.cluster_width = scene_state.ubo.cluster_width;
+	frame.cluster_type_size = scene_state.ubo.cluster_type_size;
+	frame.cluster_max_elements = p_render_data->cluster_max_elements;
+	frame.cluster_max_elements_div_32 = scene_state.ubo.max_cluster_element_count_div_32;
+	frame.directional_light_count = p_render_data->directional_light_count;
+
+	terrain3d_bridge_frame = frame;
+	terrain3d_bridge_frame_valid = true;
+	terrain3d_bridge_frame_pending = true;
+	terrain3d_bridge_resources_ready = false;
+	terrain3d_bridge_depth_prepass_active = false;
+}
+
+void RenderForwardClustered::_terrain3d_bridge_update_environment(const RenderDataRD *p_render_data) {
+	if (terrain3d_bridge_callback_handle == 0) {
+		return;
+	}
+	ERR_FAIL_NULL(p_render_data);
+	ERR_FAIL_NULL(p_render_data->scene_data);
+	ERR_FAIL_COND(!terrain3d_bridge_frame_valid);
+
+	const RenderSceneDataRD::EnvironmentLightingState &environment = p_render_data->scene_data->get_environment_lighting_state();
+	t3dBridgeFrame updated_frame = terrain3d_bridge_frame;
+	updated_frame.abi10_reserved_tail = 0;
+	updated_frame.environment_flags =
+			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_AMBIENT_LIGHT) ? T3D_BRIDGE_ENV_USE_AMBIENT_LIGHT : 0) |
+			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_AMBIENT_CUBEMAP) ? T3D_BRIDGE_ENV_USE_AMBIENT_CUBEMAP : 0) |
+			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_REFLECTION_CUBEMAP) ? T3D_BRIDGE_ENV_USE_REFLECTION_CUBEMAP : 0) |
+			(is_using_radiance_octmap_array() ? T3D_BRIDGE_ENV_RADIANCE_OCTMAP_ARRAY : 0);
+	updated_frame.environment_reserved0 = 0;
+	memcpy(updated_frame.ambient_light_color_energy, environment.ambient_light_color_energy, sizeof(updated_frame.ambient_light_color_energy));
+	updated_frame.ambient_color_sky_mix = environment.ambient_color_sky_mix;
+	updated_frame.emissive_exposure_normalization = environment.emissive_exposure_normalization;
+	updated_frame.ibl_exposure_normalization = environment.ibl_exposure_normalization;
+	updated_frame.radiance_pixel_size = environment.radiance_pixel_size;
+	updated_frame.radiance_border_size = environment.radiance_border_size;
+	updated_frame.environment_reserved1 = 0.0f;
+	memcpy(updated_frame.radiance_inverse_xform, environment.radiance_inverse_xform, sizeof(updated_frame.radiance_inverse_xform));
+
+	constexpr size_t environment_payload_offset = offsetof(t3dBridgeFrame, environment_flags);
+	const bool changed = memcmp(reinterpret_cast<const uint8_t *>(&updated_frame) + environment_payload_offset,
+			reinterpret_cast<const uint8_t *>(&terrain3d_bridge_frame) + environment_payload_offset,
+			sizeof(t3dBridgeFrame) - environment_payload_offset) != 0;
+	if (changed) {
+		terrain3d_bridge_frame_generation++;
+		if (terrain3d_bridge_frame_generation == 0) {
+			terrain3d_bridge_frame_generation = 1;
+		}
+		updated_frame.generation = terrain3d_bridge_frame_generation;
+		terrain3d_bridge_frame = updated_frame;
+		terrain3d_bridge_frame_pending = true;
+	}
+}
+
+void RenderForwardClustered::_terrain3d_bridge_update_resources(const RenderDataRD *p_render_data, RID p_radiance_texture, RID p_previous_depth_texture) {
+	if (terrain3d_bridge_callback_handle == 0) {
+		return;
+	}
+	ERR_FAIL_NULL(p_render_data);
+	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
+	RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
+
+	t3dBridgeSceneResources resources = {};
+	resources.abi_version = T3D_FORWARD_BRIDGE_ABI;
+	resources.struct_size = sizeof(t3dBridgeSceneResources);
+	resources.directional_light_buffer = _terrain3d_bridge_rid(light_storage->get_directional_light_buffer());
+	resources.omni_light_buffer = _terrain3d_bridge_rid(light_storage->get_omni_light_buffer());
+	resources.spot_light_buffer = _terrain3d_bridge_rid(light_storage->get_spot_light_buffer());
+	resources.area_light_buffer = _terrain3d_bridge_rid(light_storage->get_area_light_buffer());
+	resources.cluster_buffer = _terrain3d_bridge_rid(p_render_data->cluster_buffer);
+	resources.shadow_atlas = _terrain3d_bridge_rid(light_storage->owns_shadow_atlas(p_render_data->shadow_atlas) ? light_storage->shadow_atlas_get_texture(p_render_data->shadow_atlas) : RID());
+	resources.directional_shadow_atlas = _terrain3d_bridge_rid(light_storage->directional_shadow_get_texture());
+	resources.shadow_sampler = _terrain3d_bridge_rid(scene_shader.shadow_sampler);
+	resources.reflection_probe_buffer = _terrain3d_bridge_rid(light_storage->get_reflection_probe_buffer());
+	resources.reflection_atlas = _terrain3d_bridge_rid(p_render_data->reflection_atlas.is_valid() ? light_storage->reflection_atlas_get_texture(p_render_data->reflection_atlas) : RID());
+	resources.decal_buffer = _terrain3d_bridge_rid(texture_storage->get_decal_buffer());
+	resources.decal_atlas = _terrain3d_bridge_rid(texture_storage->decal_atlas_get_texture());
+	resources.decal_atlas_srgb = _terrain3d_bridge_rid(texture_storage->decal_atlas_get_texture_srgb());
+	resources.radiance_texture = _terrain3d_bridge_rid(p_radiance_texture);
+	resources.previous_depth_texture = _terrain3d_bridge_rid(p_previous_depth_texture);
+
+	constexpr size_t resource_payload_offset = offsetof(t3dBridgeSceneResources, directional_light_buffer);
+	const bool changed = terrain3d_bridge_resources.generation == 0 || memcmp(reinterpret_cast<const uint8_t *>(&resources) + resource_payload_offset, reinterpret_cast<const uint8_t *>(&terrain3d_bridge_resources) + resource_payload_offset, sizeof(t3dBridgeSceneResources) - resource_payload_offset) != 0;
+	if (changed) {
+		resources.generation = terrain3d_bridge_resources.generation + 1;
+		if (resources.generation == 0) {
+			resources.generation = 1;
+		}
+		terrain3d_bridge_resources = resources;
+		terrain3d_bridge_resources_pending = true;
+	}
+	terrain3d_bridge_resources_ready = true;
+}
+
+void RenderForwardClustered::_render_list_with_draw_list(RenderListParameters *p_params, RID p_framebuffer, BitField<RD::DrawFlags> p_draw_flags, const Vector<Color> &p_clear_color_values, float p_clear_depth_value, uint32_t p_clear_stencil_value, const Rect2 &p_region, t3dBridgePassKind p_terrain3d_pass_kind, t3dBridgeShadow *p_terrain3d_shadow) {
 	RD::FramebufferFormatID fb_format = RD::get_singleton()->framebuffer_get_format(p_framebuffer);
 	p_params->framebuffer_format = fb_format;
 
+	uint64_t terrain3d_token = 0;
+	Terrain3DForwardPlusBridge *terrain3d_bridge = Terrain3DForwardPlusBridge::get_singleton();
+	const Terrain3DForwardPlusBridge::RenderThreadHandle callback_handle = terrain3d_bridge_callback_handle;
+	if (terrain3d_bridge != nullptr && callback_handle != 0 && p_terrain3d_pass_kind != T3D_BRIDGE_PASS_INVALID) {
+		terrain3d_bridge_pass_serial++;
+		if (terrain3d_bridge_pass_serial == 0) {
+			terrain3d_bridge_pass_serial = 1;
+		}
+		if (p_terrain3d_shadow != nullptr) {
+			p_terrain3d_shadow->native_pass_mode = p_params->pass_mode;
+			p_terrain3d_shadow->flags = p_params->reverse_cull ? T3D_BRIDGE_PASS_REVERSE_CULL : 0;
+			p_terrain3d_shadow->sample_count = 1;
+			p_terrain3d_shadow->framebuffer_format = int64_t(fb_format);
+			p_terrain3d_shadow->serial = terrain3d_bridge_pass_serial;
+			p_terrain3d_shadow->scene_pass = get_scene_pass();
+			p_terrain3d_shadow->render_frame = RSG::rasterizer->get_frame_number();
+			p_terrain3d_shadow->viewport_key = p_framebuffer.get_id();
+			terrain3d_token = terrain3d_bridge->prepare_shadow(callback_handle, p_terrain3d_shadow);
+		} else if (terrain3d_bridge_frame_valid) {
+			t3dBridgePass pass = {};
+			pass.abi_version = T3D_FORWARD_BRIDGE_ABI;
+			pass.struct_size = sizeof(t3dBridgePass);
+			pass.pass_kind = p_terrain3d_pass_kind;
+			pass.native_pass_mode = p_params->pass_mode;
+			pass.color_pass_flags = p_params->color_pass_flags;
+			pass.flags = (terrain3d_bridge_depth_prepass_active ? T3D_BRIDGE_PASS_DEPTH_PREPASS_ACTIVE : 0) |
+					(p_params->reverse_cull ? T3D_BRIDGE_PASS_REVERSE_CULL : 0);
+			pass.framebuffer_format = int64_t(fb_format);
+			pass.serial = terrain3d_bridge_pass_serial;
+			pass.native_framebuffer = _terrain3d_bridge_rid(p_framebuffer);
+			const t3dBridgeFrame *frame = terrain3d_bridge_frame_pending ? &terrain3d_bridge_frame : nullptr;
+			const t3dBridgeSceneResources *resources = terrain3d_bridge_resources_ready && terrain3d_bridge_resources_pending ? &terrain3d_bridge_resources : nullptr;
+			terrain3d_token = terrain3d_bridge->prepare(callback_handle, frame, resources, &pass);
+			if (terrain3d_token == pass.serial) {
+				if (frame != nullptr) {
+					terrain3d_bridge_frame_pending = false;
+				}
+				if (resources != nullptr) {
+					terrain3d_bridge_resources_pending = false;
+				}
+			}
+		}
+	}
+
 	RD::DrawListID draw_list = RD::get_singleton()->draw_list_begin(p_framebuffer, p_draw_flags, p_clear_color_values, p_clear_depth_value, p_clear_stencil_value, p_region);
+	if (terrain3d_token != 0) {
+		terrain3d_bridge->submit(callback_handle, terrain3d_token, int64_t(draw_list));
+	}
 	_render_list(draw_list, fb_format, p_params, 0, p_params->element_count);
 	RD::get_singleton()->draw_list_end();
 }
@@ -1578,7 +1899,7 @@ void RenderForwardClustered::_copy_framebuffer_to_ss_effects(Ref<RenderSceneBuff
 	ss_effects->copy_internal_texture_to_last_frame(p_render_buffers, *copy_effects);
 }
 
-void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, bool p_use_ssao, bool p_use_ssil, bool p_use_ssr, bool p_use_sscs, bool p_use_gi, const RID *p_normal_roughness_slices, const RID *p_voxel_gi_buffer_slices) {
+void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, bool p_use_ssao, bool p_use_ssil, bool p_use_ssr, bool p_use_sscs, bool p_use_gi, const RID *p_normal_roughness_slices, RID p_voxel_gi_buffer) {
 	// Render shadows while GI is rendering, due to how barriers are handled, this should happen at the same time
 	RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
 	RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
@@ -1678,7 +1999,7 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 	}
 
 	if (render_gi) {
-		gi.process_gi(rb, p_normal_roughness_slices, p_voxel_gi_buffer_slices, p_render_data->environment, p_render_data->scene_data->view_count, p_render_data->scene_data->view_projection, p_render_data->scene_data->view_eye_offset, p_render_data->scene_data->cam_transform, *p_render_data->voxel_gi_instances);
+		gi.process_gi(rb, p_normal_roughness_slices, p_voxel_gi_buffer, p_render_data->environment, p_render_data->scene_data->view_count, p_render_data->scene_data->view_projection, p_render_data->scene_data->view_eye_offset, p_render_data->scene_data->cam_transform, *p_render_data->voxel_gi_instances);
 	}
 
 	if (render_shadows) {
@@ -1862,6 +2183,8 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	enum {
 		SCALE_NONE,
 		SCALE_FSR2,
+		SCALE_XESS,
+		SCALE_DLSS,
 		SCALE_MFX,
 	} scale_type = SCALE_NONE;
 
@@ -1869,6 +2192,20 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		case RSE::VIEWPORT_SCALING_3D_MODE_FSR2:
 			scale_type = SCALE_FSR2;
 			break;
+#ifdef STREAMLINE_ENABLED
+		case RSE::VIEWPORT_SCALING_3D_MODE_DLSS:
+			scale_type = (dlss_effect != nullptr && dlss_effect->is_supported() && rb_data.is_valid() &&
+					rb_data->ensure_dlss(dlss_effect, rb->get_view_count())) ? SCALE_DLSS : SCALE_FSR2;
+			break;
+#endif
+#ifdef XESS_ENABLED
+		case RSE::VIEWPORT_SCALING_3D_MODE_XESS:
+			// Establish all per-eye contexts before recording any vendor pass. If
+			// creation or prior native execution failed, use unchanged upstream FSR2.
+			scale_type = (xess_effect != nullptr && xess_effect->is_supported() && rb_data.is_valid() &&
+					rb_data->ensure_xess(xess_effect, rb->get_view_count())) ? SCALE_XESS : SCALE_FSR2;
+			break;
+#endif
 		case RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL:
 #ifdef METAL_MFXTEMPORAL_ENABLED
 			scale_type = SCALE_MFX;
@@ -2184,6 +2521,14 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	RSE::ViewportMSAA msaa = rb->get_msaa_3d();
 	bool use_msaa = msaa != RSE::VIEWPORT_MSAA_DISABLED;
+	_terrain3d_bridge_begin_frame(p_render_data, screen_size, texture_multisamples[msaa], is_reflection_probe);
+	const bool terrain3d_depth_history_capture = terrain3d_bridge_callback_handle != 0 && rb_data.is_valid() && !is_reflection_probe && rb->get_view_count() == 1 && rb->has_depth_texture();
+	RID terrain3d_previous_depth_texture;
+	if (terrain3d_depth_history_capture && rb_data->is_terrain3d_previous_depth_valid() && rb->has_texture(RB_SCOPE_BUFFERS, RB_TEX_BACK_DEPTH)) {
+		terrain3d_previous_depth_texture = rb->get_texture_slice(RB_SCOPE_BUFFERS, RB_TEX_BACK_DEPTH, 0, 0);
+	} else if (rb_data.is_valid() && !terrain3d_depth_history_capture) {
+		rb_data->set_terrain3d_previous_depth_valid(false);
+	}
 
 	bool ce_pre_opaque_resolved_color = use_msaa && _compositor_effects_has_flag(p_render_data, RSE::COMPOSITOR_EFFECT_FLAG_ACCESS_RESOLVED_COLOR, RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_PRE_OPAQUE);
 	bool ce_post_opaque_resolved_color = use_msaa && _compositor_effects_has_flag(p_render_data, RSE::COMPOSITOR_EFFECT_FLAG_ACCESS_RESOLVED_COLOR, RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_OPAQUE);
@@ -2197,6 +2542,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	bool debug_sdfgi_probes = get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_SDFGI_PROBES;
 	bool force_depth_pre_pass = scene_state.used_opaque_stencil || using_ssao || using_ssr || using_sscs || using_ssil;
 	bool depth_pre_pass = (force_depth_pre_pass || scene_shader.depth_prepass_enabled) && depth_framebuffer.is_valid();
+	terrain3d_bridge_depth_prepass_active = depth_pre_pass;
 
 	SceneShaderForwardClustered::ShaderSpecialization base_specialization = scene_shader.default_specialization;
 	base_specialization.use_depth_fog = p_render_data->environment.is_valid() && environment_get_fog_mode(p_render_data->environment) == RSE::EnvironmentFogMode::ENV_FOG_MODE_DEPTH;
@@ -2222,7 +2568,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 		bool finish_depth = using_ssao || using_ssil || using_sdfgi || using_voxelgi || ce_pre_opaque_resolved_depth || ce_post_opaque_resolved_depth;
 		RenderListParameters render_list_params(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].element_info.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), reverse_cull, depth_pass_mode, 0, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization, !is_reflection_probe);
-		_render_list_with_draw_list(&render_list_params, depth_framebuffer, RD::DrawFlags(needs_pre_resolve ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_ALL), depth_pass_clear, 0.0f, 0u, p_render_data->render_region);
+		_render_list_with_draw_list(&render_list_params, depth_framebuffer, RD::DrawFlags(needs_pre_resolve ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_ALL), depth_pass_clear, 0.0f, 0u, p_render_data->render_region, T3D_BRIDGE_PASS_DEPTH);
 
 		RD::get_singleton()->draw_command_end_label();
 
@@ -2258,21 +2604,27 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	}
 
 	RID normal_roughness_views[RendererSceneRender::MAX_RENDER_VIEWS];
-	RID voxel_gi_views[RendererSceneRender::MAX_RENDER_VIEWS];
-
-	if (rb_data.is_valid()) {
-		if (rb_data->has_normal_roughness()) {
-			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
-				normal_roughness_views[v] = rb_data->get_normal_roughness(v);
-			}
-		}
-		if (rb_data->has_voxelgi()) {
-			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
-				voxel_gi_views[v] = rb_data->get_voxelgi(v);
-			}
+	if (rb_data.is_valid() && rb_data->has_normal_roughness()) {
+		for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+			normal_roughness_views[v] = rb_data->get_normal_roughness(v);
 		}
 	}
-	_pre_opaque_render(p_render_data, using_ssao, using_ssil, using_ssr, using_sscs, using_sdfgi || using_voxelgi, normal_roughness_views, voxel_gi_views);
+	_terrain3d_bridge_update_resources(p_render_data, radiance_texture, terrain3d_previous_depth_texture);
+	_pre_opaque_render(p_render_data, using_ssao, using_ssil, using_ssr, using_sscs, using_sdfgi || using_voxelgi, normal_roughness_views, rb_data.is_valid() && rb_data->has_voxelgi() ? rb_data->get_voxelgi() : RID());
+
+	const uint32_t terrain3d_frame_flags = (terrain3d_bridge_frame.flags & ~T3D_BRIDGE_FRAME_DIRECTIONAL_SOFT_SHADOWS) |
+			(p_render_data->directional_light_soft_shadows ? T3D_BRIDGE_FRAME_DIRECTIONAL_SOFT_SHADOWS : 0);
+	if (terrain3d_bridge_callback_handle != 0 && (terrain3d_bridge_frame.directional_light_count != p_render_data->directional_light_count || terrain3d_bridge_frame.flags != terrain3d_frame_flags)) {
+		terrain3d_bridge_frame.directional_light_count = p_render_data->directional_light_count;
+		terrain3d_bridge_frame.flags = terrain3d_frame_flags;
+		terrain3d_bridge_frame_generation++;
+		if (terrain3d_bridge_frame_generation == 0) {
+			terrain3d_bridge_frame_generation = 1;
+		}
+		terrain3d_bridge_frame.generation = terrain3d_bridge_frame_generation;
+		terrain3d_bridge_frame_pending = true;
+	}
+	_terrain3d_bridge_update_resources(p_render_data, radiance_texture, terrain3d_previous_depth_texture);
 
 	if (current_cluster_builder) {
 		base_specialization.cluster_has_area_light = current_cluster_builder->get_cluster_count_by_type(ClusterBuilderRD::ELEMENT_TYPE_AREA_LIGHT) != 0;
@@ -2289,6 +2641,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	_update_render_base_uniform_set();
 
 	uint32_t opaque_pass_uniform_buffer_index = _setup_environment(p_render_data, is_reflection_probe, screen_size, screen_size, p_default_bg_color, true, using_motion_pass);
+	_terrain3d_bridge_update_environment(p_render_data);
 
 	RID rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, p_render_data, is_multiview, radiance_texture, samplers, opaque_pass_uniform_buffer_index, true);
 
@@ -2313,13 +2666,13 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			uint32_t opaque_color_pass_flags = using_motion_pass ? (color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS)) : color_pass_flags;
 			RID opaque_framebuffer = using_motion_pass ? rb_data->get_color_pass_fb(opaque_color_pass_flags) : color_framebuffer;
 			RenderListParameters render_list_params(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].element_info.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), reverse_cull, PASS_MODE_COLOR, opaque_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization, !is_reflection_probe);
-			_render_list_with_draw_list(&render_list_params, opaque_framebuffer, RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | (depth_pre_pass ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_DEPTH), c, 0.0f, 0u, p_render_data->render_region);
+			_render_list_with_draw_list(&render_list_params, opaque_framebuffer, RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | (depth_pre_pass ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_DEPTH), c, 0.0f, 0u, p_render_data->render_region, T3D_BRIDGE_PASS_OPAQUE);
 		}
 
 		RD::get_singleton()->draw_command_end_label();
 
 		if (using_motion_pass) {
-			if (scale_type == SCALE_MFX) {
+			if (scale_type == SCALE_MFX || scale_type == SCALE_XESS || scale_type == SCALE_DLSS) {
 				motion_vectors_store->process(rb,
 						p_render_data->scene_data->cam_projection, p_render_data->scene_data->cam_transform,
 						p_render_data->scene_data->prev_cam_projection, p_render_data->scene_data->prev_cam_transform);
@@ -2339,7 +2692,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_MOTION, p_render_data, is_multiview, radiance_texture, samplers, opaque_pass_uniform_buffer_index, true);
 
 			RenderListParameters render_list_params(render_list[RENDER_LIST_MOTION].elements.ptr(), render_list[RENDER_LIST_MOTION].element_info.ptr(), render_list[RENDER_LIST_MOTION].elements.size(), reverse_cull, PASS_MODE_COLOR, color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization, !is_reflection_probe);
-			_render_list_with_draw_list(&render_list_params, color_framebuffer);
+			_render_list_with_draw_list(&render_list_params, color_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, Rect2(), T3D_BRIDGE_PASS_MOTION);
 
 			RD::get_singleton()->draw_command_end_label();
 		}
@@ -2466,14 +2819,17 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		}
 	}
 
-	if (scene_state.used_depth_texture || global_surface_data.depth_texture_used) {
+	if (scene_state.used_depth_texture || global_surface_data.depth_texture_used || terrain3d_depth_history_capture) {
 		RENDER_TIMESTAMP("Copy Depth Texture");
 
 		_render_buffers_ensure_depth_texture(p_render_data);
 
-		if (scene_state.used_depth_texture) {
+		if (scene_state.used_depth_texture || terrain3d_depth_history_capture) {
 			// Copy depth texture to backbuffer so we can read from it
 			_render_buffers_copy_depth_texture(p_render_data);
+			if (terrain3d_depth_history_capture) {
+				rb_data->set_terrain3d_previous_depth_valid(rb->has_texture(RB_SCOPE_BUFFERS, RB_TEX_BACK_DEPTH));
+			}
 		}
 	}
 
@@ -2505,6 +2861,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	RD::get_singleton()->draw_command_begin_label("Render 3D Transparent Pass");
 
 	uint32_t transparent_pass_uniform_buffer_index = _setup_environment(p_render_data, is_reflection_probe, screen_size, screen_size, p_default_bg_color, false);
+	_terrain3d_bridge_update_environment(p_render_data);
 
 	rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_ALPHA, p_render_data, is_multiview, radiance_texture, samplers, transparent_pass_uniform_buffer_index, true);
 
@@ -2515,7 +2872,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 		RID alpha_framebuffer = rb_data.is_valid() ? rb_data->get_color_pass_fb(transparent_color_pass_flags) : color_only_framebuffer;
 		RenderListParameters render_list_params(render_list[RENDER_LIST_ALPHA].elements.ptr(), render_list[RENDER_LIST_ALPHA].element_info.ptr(), render_list[RENDER_LIST_ALPHA].elements.size(), reverse_cull, PASS_MODE_COLOR, transparent_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization, !is_reflection_probe);
-		_render_list_with_draw_list(&render_list_params, alpha_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+		_render_list_with_draw_list(&render_list_params, alpha_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region, T3D_BRIDGE_PASS_TRANSPARENT);
 	}
 
 	RD::get_singleton()->draw_command_end_label();
@@ -2563,6 +2920,41 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	}
 
 	if (rb_data.is_valid() && (using_upscaling || using_taa)) {
+#if defined(XESS_ENABLED) || defined(STREAMLINE_ENABLED)
+		// If native callback registration fails, there are no vendor commands
+		// to roll back. The original FSR2 effect can safely record this view now.
+		// Do not use this for late failures after native commands are recorded.
+		auto fallback_vendor_view = [&](uint32_t p_view, RID p_exposure) {
+			rb_data->ensure_fsr2(fsr2_effect);
+			if (rb_data->get_fsr2_context() == nullptr) {
+				ERR_PRINT_ONCE("Vendor upscaler and upstream FSR2 fallback both unavailable.");
+				return;
+			}
+			const auto *scene = p_render_data->scene_data;
+			const real_t fov = scene->cam_projection.get_fov();
+			const real_t aspect = scene->cam_projection.get_aspect();
+			RendererRD::FSR2Effect::Parameters f;
+			f.context = rb_data->get_fsr2_context();
+			f.internal_size = rb->get_internal_size();
+			f.sharpness = CLAMP(1.0f - (rb->get_fsr_sharpness() / 2.0f), 0.0f, 1.0f);
+			f.color = rb->get_internal_texture(p_view);
+			f.depth = rb->get_depth_texture(p_view);
+			f.velocity = rb->get_velocity_buffer(false, p_view);
+			f.reactive = rb->get_internal_texture_reactive(p_view);
+			f.exposure = p_exposure;
+			f.output = rb->get_upscaled_texture(p_view);
+			f.z_near = scene->z_near;
+			f.z_far = scene->z_far;
+			f.fovy = scene->cam_projection.get_fovy(fov, 1.0 / aspect);
+			f.jitter = scene->taa_jitter * Vector2(rb->get_internal_size()) * 0.5f;
+			f.delta_time = float(time_step);
+			f.reset_accumulation = false; // Same behavior as upstream FSR2.
+			Projection correction;
+			correction.set_depth_correction(true, true, false);
+			f.reprojection = (correction * scene->prev_cam_projection) * scene->prev_cam_transform.affine_inverse() * scene->cam_transform * (correction * scene->cam_projection).inverse();
+			fsr2_effect->upscale(f);
+		};
+#endif
 		if (scale_type == SCALE_FSR2) {
 			rb_data->ensure_fsr2(fsr2_effect);
 
@@ -2609,6 +3001,77 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			}
 
 			RD::get_singleton()->draw_command_end_label();
+#ifdef STREAMLINE_ENABLED
+		} else if (scale_type == SCALE_DLSS) {
+			RID exposure;
+			if (RSG::camera_attributes->camera_attributes_uses_auto_exposure(p_render_data->camera_attributes)) {
+				exposure = luminance->get_current_luminance_buffer(rb);
+			}
+			RD::get_singleton()->draw_command_begin_label("NVIDIA DLSS");
+			RENDER_TIMESTAMP("DLSS");
+			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+				RendererRD::DLSSEffect::Parameters p;
+				p.context = rb_data->get_dlss_context(v);
+				p.internal_size = rb->get_internal_size();
+				p.color = rb->get_internal_texture(v);
+				p.depth = rb->get_depth_texture(v);
+				p.velocity = rb->get_velocity_buffer(false, v);
+				p.exposure = exposure;
+				p.output = rb->get_upscaled_texture(v);
+				p.jitter = p_render_data->scene_data->taa_jitter * Vector2(rb->get_internal_size()) * 0.5f;
+				p.near_plane = p_render_data->scene_data->z_near;
+				p.far_plane = p_render_data->scene_data->z_far;
+				const auto *scene = p_render_data->scene_data;
+				const Projection &current_projection = scene->view_projection[v];
+				const Projection &previous_projection = scene->prev_view_projection[v];
+				const real_t fov = current_projection.get_fov();
+				p.fovy = Math::deg_to_rad(current_projection.get_fovy(fov, 1.0 / current_projection.get_aspect()));
+				p.camera_projection = current_projection;
+				p.camera_transform = scene->cam_transform;
+				Projection correction;
+				correction.set_depth_correction(true, true, false);
+				p.reprojection = (correction * previous_projection) * scene->prev_cam_transform.affine_inverse() * scene->cam_transform * (correction * current_projection).inverse();
+				p.reset_history = !p.context->history_initialized;
+				if (dlss_effect->upscale(p)) {
+					p.context->history_initialized = true;
+				} else {
+					ERR_PRINT_ONCE("NVIDIA DLSS: failed to enqueue native execution; using upstream FSR2 this frame.");
+					fallback_vendor_view(v, exposure);
+				}
+			}
+			RD::get_singleton()->draw_command_end_label();
+#endif
+#ifdef XESS_ENABLED
+		} else if (scale_type == SCALE_XESS) {
+			RID exposure;
+			if (RSG::camera_attributes->camera_attributes_uses_auto_exposure(p_render_data->camera_attributes)) {
+				exposure = luminance->get_current_luminance_buffer(rb);
+			}
+			RD::get_singleton()->draw_command_begin_label("XeSS");
+			RENDER_TIMESTAMP("XeSS");
+			Vector2 jitter = p_render_data->scene_data->taa_jitter * Vector2(rb->get_internal_size()) * 0.5f;
+			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
+				RendererRD::XeSSEffect::Parameters params;
+				params.context = rb_data->get_xess_context(v);
+				params.internal_size = rb->get_internal_size();
+				params.color = rb->get_internal_texture(v);
+				params.depth = rb->get_depth_texture(v);
+				params.velocity = rb->get_velocity_buffer(false, v);
+				params.exposure = exposure;
+				params.output = rb->get_upscaled_texture(v);
+				params.jitter = jitter;
+				params.reset_accumulation = !params.context->history_initialized;
+				if (xess_effect->upscale(params)) {
+					params.context->history_initialized = true;
+				} else {
+					// An enqueue failure is detected before callback execution; no invalid
+					// vendor commands have been added to the native command buffer.
+					ERR_PRINT_ONCE("Intel XeSS: could not register native callback; using upstream FSR2 this frame.");
+					fallback_vendor_view(v, exposure);
+				}
+			}
+			RD::get_singleton()->draw_command_end_label();
+#endif
 		} else if (scale_type == SCALE_MFX) {
 #ifdef METAL_MFXTEMPORAL_ENABLED
 			bool reset = rb_data->ensure_mfx_temporal(mfx_temporal_effect);
@@ -2712,6 +3175,8 @@ void RenderForwardClustered::_render_shadow_pass(RID p_light, RID p_shadow_atlas
 	ERR_FAIL_COND(!light_storage->owns_light_instance(p_light));
 
 	RID base = light_storage->light_instance_get_base_light(p_light);
+	const uint32_t shadow_caster_mask = light_storage->light_get_shadow_caster_mask(base);
+	const uint32_t light_cull_mask = light_storage->light_get_cull_mask(base);
 
 	Rect2i atlas_rect;
 	uint32_t atlas_size = 1;
@@ -2875,7 +3340,7 @@ void RenderForwardClustered::_render_shadow_pass(RID p_light, RID p_shadow_atlas
 
 	if (render_cubemap) {
 		//rendering to cubemap
-		_render_shadow_append(render_fb, p_instances, light_projection, light_transform, zfar, 0, 0, reverse_cull_face, false, false, use_pancake, p_lod_distance_multiplier, p_screen_mesh_lod_threshold, Rect2(), false, true, true, true, p_render_info, p_viewport_size, p_main_cam_transform);
+		_render_shadow_append(render_fb, p_instances, light_projection, light_transform, zfar, 0, 0, reverse_cull_face, false, false, use_pancake, p_lod_distance_multiplier, p_screen_mesh_lod_threshold, Rect2(), false, true, true, true, p_render_info, p_viewport_size, p_main_cam_transform, shadow_caster_mask, light_cull_mask, p_pass);
 		if (finalize_cubemap) {
 			_render_shadow_process();
 			_render_shadow_end();
@@ -2893,7 +3358,7 @@ void RenderForwardClustered::_render_shadow_pass(RID p_light, RID p_shadow_atlas
 
 	} else {
 		//render shadow
-		_render_shadow_append(render_fb, p_instances, light_projection, light_transform, zfar, 0, 0, reverse_cull_face, using_dual_paraboloid, using_dual_paraboloid_flip, use_pancake, p_lod_distance_multiplier, p_screen_mesh_lod_threshold, atlas_rect, flip_y, p_clear_region, p_open_pass, p_close_pass, p_render_info, p_viewport_size, p_main_cam_transform);
+		_render_shadow_append(render_fb, p_instances, light_projection, light_transform, zfar, 0, 0, reverse_cull_face, using_dual_paraboloid, using_dual_paraboloid_flip, use_pancake, p_lod_distance_multiplier, p_screen_mesh_lod_threshold, atlas_rect, flip_y, p_clear_region, p_open_pass, p_close_pass, p_render_info, p_viewport_size, p_main_cam_transform, shadow_caster_mask, light_cull_mask, p_pass);
 	}
 }
 
@@ -2907,7 +3372,7 @@ void RenderForwardClustered::_render_shadow_begin() {
 	// because _fill_instance_data will do that if it detects p_offset == 0u.
 }
 
-void RenderForwardClustered::_render_shadow_append(RID p_framebuffer, const PagedArray<RenderGeometryInstance *> &p_instances, const Projection &p_projection, const Transform3D &p_transform, float p_zfar, float p_bias, float p_normal_bias, bool p_reverse_cull_face, bool p_use_dp, bool p_use_dp_flip, bool p_use_pancake, float p_lod_distance_multiplier, float p_screen_mesh_lod_threshold, const Rect2i &p_rect, bool p_flip_y, bool p_clear_region, bool p_begin, bool p_end, RenderingServerTypes::RenderInfo *p_render_info, const Size2i &p_viewport_size, const Transform3D &p_main_cam_transform) {
+void RenderForwardClustered::_render_shadow_append(RID p_framebuffer, const PagedArray<RenderGeometryInstance *> &p_instances, const Projection &p_projection, const Transform3D &p_transform, float p_zfar, float p_bias, float p_normal_bias, bool p_reverse_cull_face, bool p_use_dp, bool p_use_dp_flip, bool p_use_pancake, float p_lod_distance_multiplier, float p_screen_mesh_lod_threshold, const Rect2i &p_rect, bool p_flip_y, bool p_clear_region, bool p_begin, bool p_end, RenderingServerTypes::RenderInfo *p_render_info, const Size2i &p_viewport_size, const Transform3D &p_main_cam_transform, uint32_t p_caster_mask, uint32_t p_light_cull_mask, uint32_t p_pass_index) {
 	SceneState::ShadowPass shadow_pass;
 
 	RenderSceneDataRD scene_data;
@@ -2978,6 +3443,19 @@ void RenderForwardClustered::_render_shadow_append(RID p_framebuffer, const Page
 		shadow_pass.rect = p_rect;
 
 		shadow_pass.uniform_buffer_index = uniform_buffer_index;
+		if (terrain3d_bridge_callback_handle != 0) {
+			t3dBridgeShadow &bridge_shadow = shadow_pass.terrain3d_bridge_shadow;
+			bridge_shadow.abi_version = T3D_FORWARD_BRIDGE_ABI;
+			bridge_shadow.struct_size = sizeof(t3dBridgeShadow);
+			bridge_shadow.shadow_caster_mask = p_caster_mask;
+			bridge_shadow.shadow_light_cull_mask = p_light_cull_mask;
+			bridge_shadow.flags = p_reverse_cull_face ? T3D_BRIDGE_PASS_REVERSE_CULL : 0;
+			Projection correction;
+			correction.set_depth_correction(!p_flip_y);
+			_terrain3d_store_projection((correction * p_projection) * Projection(p_transform.affine_inverse()), bridge_shadow.view_projection);
+			_terrain3d_store_transform(p_transform, bridge_shadow.camera_transform);
+		}
+
 
 		scene_state.shadow_passes.push_back(shadow_pass);
 	}
@@ -3004,7 +3482,7 @@ void RenderForwardClustered::_render_shadow_end() {
 
 	for (SceneState::ShadowPass &shadow_pass : scene_state.shadow_passes) {
 		RenderListParameters render_list_parameters(render_list[RENDER_LIST_SECONDARY].elements.ptr() + shadow_pass.element_from, render_list[RENDER_LIST_SECONDARY].element_info.ptr() + shadow_pass.element_from, shadow_pass.element_count, shadow_pass.flip_cull, shadow_pass.pass_mode, 0, true, false, shadow_pass.rp_uniform_set, false, Vector2(), shadow_pass.lod_distance_multiplier, shadow_pass.screen_mesh_lod_threshold, 1, shadow_pass.element_from);
-		_render_list_with_draw_list(&render_list_parameters, shadow_pass.framebuffer, shadow_pass.clear_depth ? RD::DRAW_CLEAR_DEPTH : RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0, shadow_pass.rect);
+		_render_list_with_draw_list(&render_list_parameters, shadow_pass.framebuffer, shadow_pass.clear_depth ? RD::DRAW_CLEAR_DEPTH : RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0, shadow_pass.rect, T3D_BRIDGE_PASS_SHADOW, &shadow_pass.terrain3d_bridge_shadow);
 	}
 
 	RD::get_singleton()->draw_command_end_label();
@@ -5390,9 +5868,17 @@ RenderForwardClustered::RenderForwardClustered() {
 
 	taa = memnew(RendererRD::TAA);
 	fsr2_effect = memnew(RendererRD::FSR2Effect);
+#ifdef STREAMLINE_ENABLED
+	dlss_effect = memnew(RendererRD::DLSSEffect);
+#endif
+#ifdef XESS_ENABLED
+	xess_effect = memnew(RendererRD::XeSSEffect);
+#endif
 	ss_effects = memnew(RendererRD::SSEffects);
-#ifdef METAL_MFXTEMPORAL_ENABLED
+#if defined(METAL_MFXTEMPORAL_ENABLED) || defined(XESS_ENABLED)
 	motion_vectors_store = memnew(RendererRD::MotionVectorsStore);
+#endif
+#ifdef METAL_MFXTEMPORAL_ENABLED
 	mfx_temporal_effect = memnew(RendererRD::MFXTemporalEffect);
 #endif
 }
@@ -5412,13 +5898,27 @@ RenderForwardClustered::~RenderForwardClustered() {
 		memdelete(fsr2_effect);
 		fsr2_effect = nullptr;
 	}
+#ifdef XESS_ENABLED
+	if (xess_effect) {
+		memdelete(xess_effect);
+		xess_effect = nullptr;
+	}
+#endif
+#ifdef STREAMLINE_ENABLED
+	if (dlss_effect) {
+		memdelete(dlss_effect);
+		dlss_effect = nullptr;
+	}
+#endif
 
 #ifdef METAL_MFXTEMPORAL_ENABLED
 	if (mfx_temporal_effect) {
 		memdelete(mfx_temporal_effect);
 		mfx_temporal_effect = nullptr;
 	}
+#endif
 
+#if defined(METAL_MFXTEMPORAL_ENABLED) || defined(XESS_ENABLED)
 	if (motion_vectors_store) {
 		memdelete(motion_vectors_store);
 		motion_vectors_store = nullptr;

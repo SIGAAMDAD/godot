@@ -120,6 +120,9 @@ class RenderingDeviceDriverD3D12 : public RenderingDeviceDriver {
 	RenderingContextDriver::Device context_device;
 	Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
 	Microsoft::WRL::ComPtr<ID3D12Device> device;
+#ifdef STREAMLINE_ENABLED
+	Microsoft::WRL::ComPtr<ID3D12Device> streamline_device_proxy;
+#endif
 	DeviceLimits device_limits;
 	RDD::Capabilities device_capabilities;
 	uint32_t feature_level = 0; // Major * 10 + minor.
@@ -916,6 +919,8 @@ public:
 	/**** DEBUG *****/
 	/****************/
 	virtual void command_insert_breadcrumb(CommandBufferID p_cmd_buffer, uint32_t p_data) override final;
+	virtual void *command_buffer_get_native_handle(CommandBufferID p_cmd_buffer) override final;
+	virtual void command_buffer_invalidate_bound_state(CommandBufferID p_cmd_buffer) override final;
 
 	/********************/
 	/**** SUBMISSION ****/

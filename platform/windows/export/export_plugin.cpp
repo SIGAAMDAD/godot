@@ -300,6 +300,34 @@ Error EditorExportPlatformWindows::export_project(const Ref<EditorExportPreset> 
 		}
 	}
 
+#ifdef XESS_ENABLED
+	// XeSS is optional at runtime; never silently bundle a stale DLL from the host OS.
+	// Export templates containing a vendor-authorized copy can ship it with the game.
+	if (bool(p_preset->get("application/export_xess_runtime"))) {
+		String dll = template_path.get_base_dir().path_join("libxess.dll");
+		if (da->file_exists(dll)) {
+			da->copy(dll, path.get_base_dir().path_join("libxess.dll"), get_chmod_flags());
+		} else {
+			add_message(EXPORT_MESSAGE_WARNING, TTR("Intel XeSS"), TTR("XeSS runtime requested, but libxess.dll is absent from the export template directory."));
+		}
+	}
+#endif
+#ifdef STREAMLINE_ENABLED
+	if (bool(p_preset->get("application/export_streamline_runtime"))) {
+		// Binaries must come from the explicitly selected, legally distributable
+		// Streamline SDK version provided with the export template.
+		const char *runtime_files[] = { "sl.interposer.dll", "sl.common.dll", "sl.dlss.dll" };
+		for (const char *file : runtime_files) {
+			String source = template_path.get_base_dir().path_join(file);
+			if (da->file_exists(source)) {
+				da->copy(source, path.get_base_dir().path_join(file), get_chmod_flags());
+			} else {
+				add_message(EXPORT_MESSAGE_WARNING, TTR("NVIDIA Streamline"), vformat(TTR("Streamline runtime requested, but %s is absent from the export template directory."), file));
+			}
+		}
+	}
+#endif
+
 	// Export project.
 	String pck_path = path;
 	if (embedded) {
@@ -484,6 +512,12 @@ void EditorExportPlatformWindows::get_export_options(List<ExportOption> *r_optio
 	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/trademarks"), ""));
 	r_options->push_back(ExportOption(PropertyInfo(Variant::INT, "application/export_angle", PROPERTY_HINT_ENUM, "Auto,Yes,No"), 0, true));
 	r_options->push_back(ExportOption(PropertyInfo(Variant::INT, "application/export_d3d12", PROPERTY_HINT_ENUM, "Auto,Yes,No"), 0, true));
+#ifdef XESS_ENABLED
+	r_options->push_back(ExportOption(PropertyInfo(Variant::BOOL, "application/export_xess_runtime"), false, true));
+#endif
+#ifdef STREAMLINE_ENABLED
+	r_options->push_back(ExportOption(PropertyInfo(Variant::BOOL, "application/export_streamline_runtime"), false, true));
+#endif
 	r_options->push_back(ExportOption(PropertyInfo(Variant::BOOL, "application/d3d12_agility_sdk_multiarch"), true, true));
 
 	String run_script = "Expand-Archive -LiteralPath '{temp_dir}\\{archive_name}' -DestinationPath '{temp_dir}'\n"

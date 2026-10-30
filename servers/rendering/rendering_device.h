@@ -186,6 +186,9 @@ private:
 	struct Buffer {
 		RDD::BufferID driver_id;
 		uint32_t size = 0;
+		uint64_t terrain3d_persistent_map_frame = UINT64_MAX;
+		uint64_t terrain3d_persistent_flush_frame = UINT64_MAX;
+		bool terrain3d_hot_managed = false;
 		BitField<RDD::BufferUsageBits> usage = {};
 		RDD::MemoryAllocationType alloc_type = {};
 		RDG::ResourceTracker *draw_tracker = nullptr;
@@ -194,6 +197,29 @@ private:
 	};
 
 	RDD::MemoryAllocationType _get_buffer_alloc_type(bool p_has_initial_data, Thread::ID p_thread_id) const;
+
+	friend class Terrain3DForwardPlusBridge;
+	struct Terrain3DDeferredUpload {
+		RDD::BufferID staging;
+		uint32_t size = 0;
+		void (*fill)(void *, uint8_t *, uint32_t) = nullptr;
+		void *userdata = nullptr;
+	} terrain3d_deferred_upload;
+	uint32_t terrain3d_upload_staging_capacity = 0;
+	struct Terrain3DPersistentSeal {
+		RID buffer;
+		bool (*seal)(void *) = nullptr;
+		void *userdata = nullptr;
+	} terrain3d_persistent_seal;
+	bool terrain3d_hot_finalizing = false;
+	bool terrain3d_hot_failed = false;
+	bool _terrain3d_has_pending_hot() const { return terrain3d_deferred_upload.fill != nullptr || terrain3d_persistent_seal.seal != nullptr; }
+	bool _terrain3d_finalize_hot();
+	bool _terrain3d_complete_hot();
+	Error _terrain3d_configure_staging(uint32_t p_capacity);
+	Error _terrain3d_buffer_update_deferred(RID p_buffer, uint32_t p_offset, uint32_t p_size, void (*p_fill)(void *, uint8_t *, uint32_t), void *p_userdata);
+	Error _terrain3d_buffer_flush_deferred(RID p_buffer, bool (*p_seal)(void *), void *p_userdata);
+	uint64_t _terrain3d_hot_backing_size(uint32_t p_size) const;
 
 	Buffer *_get_buffer_from_owner(RID p_buffer);
 	Error _buffer_initialize(Buffer *p_buffer, Span<uint8_t> p_data, uint32_t p_required_align = 32);
@@ -1798,6 +1824,7 @@ private:
 	// when the frame is cycled.
 
 	struct Frame {
+		RDD::BufferID terrain3d_upload_staging;
 		// List in usage order, from last to free to first to free.
 		List<Buffer> buffers_to_dispose_of;
 		List<Texture> textures_to_dispose_of;
@@ -1972,6 +1999,8 @@ public:
 	DriverWorkarounds get_driver_workarounds() const;
 
 	uint64_t get_frames_drawn() const { return frames_drawn; }
+	uint32_t get_frame_slot() const { return frame; }
+	bool is_on_render_thread() const { return render_thread_id == Thread::get_caller_id(); }
 
 	bool is_composite_alpha_supported() const;
 

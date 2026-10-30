@@ -192,6 +192,9 @@ public:
 	 * @param p_frames_drawn Used for debug checks when BUFFER_USAGE_DYNAMIC_PERSISTENT_BIT is set.
 	 * @return the buffer.
 	 */
+	// The native Terrain3D HOT path is optional; unsupported backends use deferred staging.
+	virtual bool buffer_supports_persistent_hot() const { return false; }
+	virtual uint64_t buffer_get_terrain3d_persistent_backing_size(uint32_t p_size) const { return 0; }
 	virtual BufferID buffer_create(uint64_t p_size, BitField<BufferUsageBits> p_usage, MemoryAllocationType p_allocation_type, uint64_t p_frames_drawn) = 0;
 	// Only for a buffer with BUFFER_USAGE_TEXEL_BIT.
 	virtual bool buffer_set_texel_format(BufferID p_buffer, DataFormat p_format) = 0;
@@ -853,6 +856,12 @@ public:
 	/**** DEBUG *****/
 	/****************/
 	virtual void command_insert_breadcrumb(CommandBufferID p_cmd_buffer, uint32_t p_data) = 0;
+
+	// Borrowed native handle valid only inside a RenderingDevice driver callback.
+	virtual void *command_buffer_get_native_handle(CommandBufferID p_cmd_buffer) { return nullptr; }
+	// External execution can invalidate the driver's cached native bindings.
+	virtual void command_buffer_invalidate_bound_state(CommandBufferID p_cmd_buffer) {}
+
 
 	/********************/
 	/**** SUBMISSION ****/

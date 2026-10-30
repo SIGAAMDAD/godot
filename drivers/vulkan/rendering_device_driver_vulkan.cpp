@@ -35,6 +35,12 @@
 #include "core/os/os.h"
 #include "core/templates/fixed_vector.h"
 #include "drivers/vulkan/vulkan_hooks.h"
+#ifdef STREAMLINE_ENABLED
+#include "drivers/streamline/streamline_runtime.h"
+#endif
+#ifdef XESS_ENABLED_VULKAN
+#include "drivers/xess/xess_context.h"
+#endif
 
 #include <thirdparty/misc/smolv.h>
 
@@ -602,6 +608,37 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	// We don't actually use this extension, but some runtime components on some platforms
 	// can and will fill the validation layers with useless info otherwise if not enabled.
 	_register_requested_device_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, false);
+
+#ifdef STREAMLINE_ENABLED
+	StreamlineRuntime &sl_runtime = StreamlineRuntime::get();
+	if (sl_runtime.is_initialized() && sl_runtime.get_requirements) {
+		sl::FeatureRequirements requirements{};
+		if (sl_runtime.get_requirements(sl::kFeatureDLSS, requirements) == sl::Result::eOk) {
+			for (uint32_t i = 0; i < requirements.vkNumDeviceExtensions; ++i) {
+				CharString ext(requirements.vkDeviceExtensions[i]);
+				if (!requested_device_extensions.has(ext)) {
+					_register_requested_device_extension(ext, false);
+				}
+			}
+		}
+	}
+#endif
+#ifdef XESS_ENABLED_VULKAN
+	// Request the device extensions XeSS reports, as optional: a device without them
+	// still works, XeSS just stays unavailable on it.
+	if (XeSSContext::get().has_vulkan()) {
+		uint32_t xess_extension_count = 0;
+		const char *const *xess_extensions = nullptr;
+		if (XeSSContext::get().xessVKGetRequiredDeviceExtensions(context_driver->instance_get(), physical_device, &xess_extension_count, &xess_extensions) == XESS_RESULT_SUCCESS) {
+			for (uint32_t i = 0; i < xess_extension_count; i++) {
+				CharString xess_extension = xess_extensions[i];
+				if (!requested_device_extensions.has(xess_extension)) {
+					_register_requested_device_extension(xess_extension, false);
+				}
+			}
+		}
+	}
+#endif
 
 	if (Engine::get_singleton()->is_generate_spirv_debug_info_enabled()) {
 		_register_requested_device_extension(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME, true);
@@ -1522,6 +1559,45 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 		}
 	}
 
+#ifdef XESS_ENABLED_VULKAN
+	// XeSS writes the features it needs into the chain handed to it. It requires them
+	// in a VkPhysicalDeviceFeatures2 chained through pNext rather than in
+	// pEnabledFeatures, which it cannot modify, so wrap Godot's features and clear
+	// pEnabledFeatures below.
+	//
+	// Seed the chain with the individual structs for the promoted features XeSS asks
+	// for. Left out, XeSS appends the VkPhysicalDeviceVulkan1{2,3}Features aggregates,
+	// which Vulkan forbids next to the individual structs Godot already chains (e.g.
+	// VkPhysicalDevicePipelineCreationCacheControlFeatures). Drivers accept that chain
+	// and then quietly leave the features off, so the XeSS shaders fault the device.
+	VkPhysicalDeviceScalarBlockLayoutFeatures xess_scalar_block_layout_features = {};
+	VkPhysicalDeviceShaderIntegerDotProductFeatures xess_integer_dot_product_features = {};
+	VkPhysicalDeviceFeatures2 xess_device_features_2 = {};
+	bool xess_owns_device_features = false;
+	if (XeSSContext::get().has_vulkan()) {
+		xess_scalar_block_layout_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES;
+		xess_scalar_block_layout_features.pNext = create_info_next;
+		create_info_next = &xess_scalar_block_layout_features;
+
+		xess_integer_dot_product_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES;
+		xess_integer_dot_product_features.pNext = create_info_next;
+		create_info_next = &xess_integer_dot_product_features;
+
+		xess_device_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+		xess_device_features_2.pNext = create_info_next;
+		xess_device_features_2.features = requested_device_features;
+
+		void *xess_features = &xess_device_features_2;
+		xess_result_t xess_result = XeSSContext::get().xessVKGetRequiredDeviceFeatures(context_driver->instance_get(), physical_device, &xess_features);
+		if (xess_result == XESS_RESULT_SUCCESS) {
+			create_info_next = xess_features;
+			xess_owns_device_features = true;
+		} else {
+			print_verbose(vformat("Intel XeSS: xessVKGetRequiredDeviceFeatures failed (%s); XeSS will stay unavailable on this device.", XeSSContext::result_to_string(xess_result)));
+		}
+	}
+#endif
+
 	VkDeviceCreateInfo create_info = {};
 	create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 	create_info.pNext = create_info_next;
@@ -1530,6 +1606,11 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 	create_info.enabledExtensionCount = enabled_extension_names.size();
 	create_info.ppEnabledExtensionNames = enabled_extension_names.ptr();
 	create_info.pEnabledFeatures = &requested_device_features;
+#ifdef XESS_ENABLED_VULKAN
+	if (xess_owns_device_features) {
+		create_info.pEnabledFeatures = nullptr;
+	}
+#endif
 
 	if (VulkanHooks::get_singleton() != nullptr) {
 		bool device_created = VulkanHooks::get_singleton()->create_vulkan_device(&create_info, &vk_device);
@@ -1544,6 +1625,38 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 			vkGetDeviceQueue(vk_device, i, j, &queue_families[i][j].queue);
 		}
 	}
+#ifdef STREAMLINE_ENABLED
+	if (StreamlineRuntime::get().is_initialized()) {
+		sl::VulkanInfo sl_info{};
+		sl_info.device = vk_device;
+		sl_info.instance = context_driver->instance_get();
+		sl_info.physicalDevice = physical_device;
+		// Queue families are not guaranteed to be ordered by capability.
+		// Publish only queues that Godot actually created on this device.
+		bool graphics_found = false;
+		bool compute_found = false;
+		for (uint32_t i = 0; i < p_queue_create_info.size(); i++) {
+			const uint32_t family = p_queue_create_info[i].queueFamilyIndex;
+			if (family >= queue_family_properties.size()) {
+				continue;
+			}
+			const VkQueueFlags flags = queue_family_properties[family].queueFlags;
+			if (!graphics_found && (flags & VK_QUEUE_GRAPHICS_BIT)) {
+				sl_info.graphicsQueueFamily = family;
+				sl_info.graphicsQueueIndex = 0;
+				graphics_found = true;
+			}
+			if (!compute_found && (flags & VK_QUEUE_COMPUTE_BIT)) {
+				sl_info.computeQueueFamily = family;
+				sl_info.computeQueueIndex = 0;
+				compute_found = true;
+			}
+		}
+		if (graphics_found && compute_found) {
+			StreamlineRuntime::get().bind_vulkan(sl_info);
+		}
+	}
+#endif
 
 	const RenderingContextDriverVulkan::Functions &functions = context_driver->functions_get();
 	if (functions.GetDeviceProcAddr != nullptr) {
@@ -1552,6 +1665,20 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 		device_functions.GetSwapchainImagesKHR = PFN_vkGetSwapchainImagesKHR(functions.GetDeviceProcAddr(vk_device, "vkGetSwapchainImagesKHR"));
 		device_functions.AcquireNextImageKHR = PFN_vkAcquireNextImageKHR(functions.GetDeviceProcAddr(vk_device, "vkAcquireNextImageKHR"));
 		device_functions.QueuePresentKHR = PFN_vkQueuePresentKHR(functions.GetDeviceProcAddr(vk_device, "vkQueuePresentKHR"));
+#ifdef STREAMLINE_ENABLED
+		// In manual-hooking mode, intercepting presentation is mandatory for
+		// Streamline's presentCommon bookkeeping, including during resizes.
+		if (StreamlineRuntime::get().is_ready()) {
+			PFN_vkGetDeviceProcAddr proxy_get = StreamlineRuntime::get().get_vulkan_device_proc_addr();
+			if (proxy_get) {
+				device_functions.CreateSwapchainKHR = (PFN_vkCreateSwapchainKHR)proxy_get(vk_device, "vkCreateSwapchainKHR");
+				device_functions.DestroySwapchainKHR = (PFN_vkDestroySwapchainKHR)proxy_get(vk_device, "vkDestroySwapchainKHR");
+				device_functions.GetSwapchainImagesKHR = (PFN_vkGetSwapchainImagesKHR)proxy_get(vk_device, "vkGetSwapchainImagesKHR");
+				device_functions.AcquireNextImageKHR = (PFN_vkAcquireNextImageKHR)proxy_get(vk_device, "vkAcquireNextImageKHR");
+				device_functions.QueuePresentKHR = (PFN_vkQueuePresentKHR)proxy_get(vk_device, "vkQueuePresentKHR");
+			}
+		}
+#endif
 
 		if (enabled_device_extension_names.has(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME)) {
 			device_functions.CreateRenderPass2KHR = PFN_vkCreateRenderPass2KHR(functions.GetDeviceProcAddr(vk_device, "vkCreateRenderPass2KHR"));
@@ -1999,6 +2126,15 @@ static_assert(ENUM_MEMBERS_EQUAL(RDD::BUFFER_USAGE_SHADER_BINDING_TABLE_BIT, VK_
 static_assert(ENUM_MEMBERS_EQUAL(RDD::BUFFER_USAGE_DEVICE_ADDRESS_BIT, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT));
 static_assert(ENUM_MEMBERS_EQUAL(RDD::BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR));
 static_assert(ENUM_MEMBERS_EQUAL(RDD::BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR));
+
+uint64_t RenderingDeviceDriverVulkan::buffer_get_terrain3d_persistent_backing_size(uint32_t p_size) const {
+	if (p_size == 0 || p_size > physical_device_properties.limits.maxStorageBufferRange) {
+		return 0;
+	}
+	const uint64_t alignment = MAX(uint64_t(16), uint64_t(physical_device_properties.limits.minStorageBufferOffsetAlignment));
+	const uint64_t aligned_size = ((uint64_t(p_size) + alignment - 1) / alignment) * alignment;
+	return aligned_size * frame_count;
+}
 
 RDD::BufferID RenderingDeviceDriverVulkan::buffer_create(uint64_t p_size, BitField<BufferUsageBits> p_usage, MemoryAllocationType p_allocation_type, uint64_t p_frames_drawn) {
 	uint32_t alignment = 16u; // 16 bytes is reasonable.
@@ -7228,6 +7364,11 @@ inline String RenderingDeviceDriverVulkan::get_vulkan_result(VkResult err) {
 /**** SUBMISSION ****/
 /********************/
 
+void *RenderingDeviceDriverVulkan::command_buffer_get_native_handle(CommandBufferID p_cmd_buffer) {
+	const CommandBufferInfo *cmd_buf_info = (const CommandBufferInfo *)p_cmd_buffer.id;
+	return (void *)cmd_buf_info->vk_command_buffer;
+}
+
 void RenderingDeviceDriverVulkan::begin_segment(uint32_t p_frame_index, uint32_t p_frames_drawn) {
 	// Per-frame segments are not required in Vulkan.
 }
@@ -7315,6 +7456,14 @@ uint64_t RenderingDeviceDriverVulkan::get_resource_native_handle(DriverResource 
 		case DRIVER_RESOURCE_TEXTURE_DATA_FORMAT: {
 			const TextureInfo *tex_info = (const TextureInfo *)p_driver_id.id;
 			return (uint64_t)tex_info->vk_view_create_info.format;
+		}
+		case DRIVER_RESOURCE_TEXTURE_DEVICE_MEMORY: {
+			const TextureInfo *tex_info = (const TextureInfo *)p_driver_id.id;
+			return (uint64_t)tex_info->allocation.info.deviceMemory;
+		}
+		case DRIVER_RESOURCE_TEXTURE_USAGE_FLAGS: {
+			const TextureInfo *tex_info = (const TextureInfo *)p_driver_id.id;
+			return (uint64_t)tex_info->vk_create_info.usage;
 		}
 		case DRIVER_RESOURCE_SAMPLER:
 		case DRIVER_RESOURCE_UNIFORM_SET:
@@ -7591,6 +7740,9 @@ RenderingDeviceDriverVulkan::~RenderingDeviceDriverVulkan() {
 	}
 
 	if (vk_device != VK_NULL_HANDLE) {
+#ifdef STREAMLINE_ENABLED
+		StreamlineRuntime::get().shutdown();
+#endif
 		vkDestroyDevice(vk_device, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_DEVICE));
 	}
 }

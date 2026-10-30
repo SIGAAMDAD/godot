@@ -1112,6 +1112,123 @@ void RenderingDevice::_staging_buffer_execute_required_action(StagingBuffers &p_
 	}
 }
 
+uint64_t RenderingDevice::_terrain3d_hot_backing_size(uint32_t p_size) const {
+	return driver->buffer_get_terrain3d_persistent_backing_size(p_size);
+}
+
+Error RenderingDevice::_terrain3d_configure_staging(uint32_t p_capacity) {
+	ERR_RENDER_THREAD_GUARD_V(ERR_UNAVAILABLE);
+	ERR_FAIL_COND_V(p_capacity == 0 || frames.is_empty(), ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(_terrain3d_has_pending_hot() || terrain3d_hot_finalizing || draw_list.active || compute_list.active || raytracing_list.active, ERR_BUSY);
+	if (terrain3d_upload_staging_capacity == p_capacity) {
+		return OK;
+	}
+	LocalVector<RDD::BufferID> new_staging;
+	for (uint32_t i = 0; i < frames.size(); i++) {
+		RDD::BufferID id = driver->buffer_create(p_capacity, RDD::BUFFER_USAGE_TRANSFER_FROM_BIT, RDD::MEMORY_ALLOCATION_TYPE_CPU, frames_drawn);
+		if (!id) {
+			for (RDD::BufferID item : new_staging) {
+				driver->buffer_free(item);
+			}
+			return ERR_OUT_OF_MEMORY;
+		}
+		new_staging.push_back(id);
+	}
+	// A previously configured pool may still be read by the GPU from an older frame.
+	if (terrain3d_upload_staging_capacity != 0) {
+		_flush_and_stall_for_all_frames();
+	}
+	for (uint32_t i = 0; i < frames.size(); i++) {
+		if (frames[i].terrain3d_upload_staging) {
+			buffer_memory.sub(driver->buffer_get_allocation_size(frames[i].terrain3d_upload_staging));
+			driver->buffer_free(frames[i].terrain3d_upload_staging);
+		}
+		frames[i].terrain3d_upload_staging = new_staging[i];
+		buffer_memory.add(driver->buffer_get_allocation_size(new_staging[i]));
+	}
+	terrain3d_upload_staging_capacity = p_capacity;
+	return OK;
+}
+
+Error RenderingDevice::_terrain3d_buffer_flush_deferred(RID p_buffer, bool (*p_seal)(void *), void *p_userdata) {
+	ERR_RENDER_THREAD_GUARD_V(ERR_UNAVAILABLE);
+	ERR_FAIL_COND_V(terrain3d_hot_failed || terrain3d_hot_finalizing, ERR_UNAVAILABLE);
+	ERR_FAIL_COND_V(draw_list.active || compute_list.active || raytracing_list.active || _terrain3d_has_pending_hot(), ERR_BUSY);
+	ERR_FAIL_NULL_V(p_seal, ERR_INVALID_PARAMETER);
+	Buffer *buffer = storage_buffer_owner.get_or_null(p_buffer);
+	ERR_FAIL_NULL_V(buffer, ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(!driver->buffer_supports_persistent_hot() || !buffer->usage.has_flag(RDD::BUFFER_USAGE_DYNAMIC_PERSISTENT_BIT) || buffer->size == 0, ERR_INVALID_PARAMETER);
+	buffer->terrain3d_hot_managed = true;
+	terrain3d_persistent_seal = { p_buffer, p_seal, p_userdata };
+	return OK;
+}
+
+bool RenderingDevice::_terrain3d_finalize_hot() {
+	ERR_FAIL_COND_V(terrain3d_hot_finalizing, false);
+	terrain3d_hot_finalizing = true;
+	bool success = !terrain3d_hot_failed;
+	if (terrain3d_persistent_seal.seal != nullptr) {
+		const Terrain3DPersistentSeal pending = terrain3d_persistent_seal;
+		const bool sealed = pending.seal(pending.userdata);
+		Buffer *buffer = storage_buffer_owner.get_or_null(pending.buffer);
+		success = success && sealed && buffer != nullptr && buffer->terrain3d_persistent_map_frame == frames_drawn && buffer->terrain3d_persistent_flush_frame == frames_drawn;
+		terrain3d_persistent_seal = {};
+	}
+	if (terrain3d_deferred_upload.fill != nullptr) {
+		uint8_t *data = driver->buffer_map(terrain3d_deferred_upload.staging);
+		CRASH_COND_MSG(data == nullptr, "Failed to map the Terrain3D deferred upload staging buffer.");
+		terrain3d_deferred_upload.fill(terrain3d_deferred_upload.userdata, data, terrain3d_deferred_upload.size);
+		driver->buffer_unmap(terrain3d_deferred_upload.staging);
+		terrain3d_deferred_upload = {};
+	}
+	terrain3d_hot_finalizing = false;
+	if (!success && !terrain3d_hot_failed) {
+		terrain3d_hot_failed = true;
+		ERR_PRINT("Terrain3D HOT sealing failed. Discarding render graph commands until device recreation.");
+	}
+	return success;
+}
+
+bool RenderingDevice::_terrain3d_complete_hot() {
+	ERR_RENDER_THREAD_GUARD_V(false);
+	ERR_FAIL_COND_V(draw_list.active || compute_list.active || raytracing_list.active || terrain3d_hot_finalizing, false);
+	if (_terrain3d_has_pending_hot()) {
+		_flush_and_stall_for_all_frames();
+	} else {
+		_stall_for_previous_frames();
+	}
+	return !terrain3d_hot_failed;
+}
+
+Error RenderingDevice::_terrain3d_buffer_update_deferred(RID p_buffer, uint32_t p_offset, uint32_t p_size,
+		void (*p_fill)(void *, uint8_t *, uint32_t), void *p_userdata) {
+	ERR_RENDER_THREAD_GUARD_V(ERR_UNAVAILABLE);
+	ERR_FAIL_COND_V(terrain3d_hot_failed || terrain3d_hot_finalizing, ERR_UNAVAILABLE);
+	ERR_FAIL_COND_V(draw_list.active || compute_list.active || raytracing_list.active, ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(_terrain3d_has_pending_hot(), ERR_ALREADY_IN_USE);
+	ERR_FAIL_NULL_V(p_fill, ERR_INVALID_PARAMETER);
+	Buffer *buffer = _get_buffer_from_owner(p_buffer);
+	ERR_FAIL_NULL_V(buffer, ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(p_size == 0 || p_offset > buffer->size || p_size > buffer->size - p_offset || (p_offset % 4) != 0 || (p_size % 4) != 0, ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(buffer->usage.has_flag(RDD::BUFFER_USAGE_DYNAMIC_PERSISTENT_BIT), ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V_MSG(terrain3d_upload_staging_capacity == 0 || p_size > terrain3d_upload_staging_capacity, ERR_INVALID_PARAMETER, "Terrain3D deferred upload exceeds configured staging capacity.");
+	_check_transfer_worker_buffer(buffer);
+	const RDD::BufferID staging = frames[frame].terrain3d_upload_staging;
+	ERR_FAIL_COND_V(!staging, ERR_UNCONFIGURED);
+	if (_buffer_make_mutable(buffer, p_buffer)) {
+		draw_graph.add_synchronization();
+	}
+	RDG::RecordedBufferCopy copy;
+	copy.source = staging;
+	copy.region.dst_offset = p_offset;
+	copy.region.size = p_size;
+	draw_graph.add_buffer_update(buffer->driver_id, buffer->draw_tracker, VectorView<RDG::RecordedBufferCopy>(&copy, 1));
+	terrain3d_deferred_upload = { staging, p_size, p_fill, p_userdata };
+	copy_bytes_count += p_size;
+	gpu_copy_count++;
+	return OK;
+}
+
 Error RenderingDevice::buffer_copy(RID p_src_buffer, RID p_dst_buffer, uint32_t p_src_offset, uint32_t p_dst_offset, uint32_t p_size) {
 	ERR_RENDER_THREAD_GUARD_V(ERR_UNAVAILABLE);
 
@@ -1499,7 +1616,11 @@ uint8_t *RenderingDevice::buffer_persistent_map_advance(RID p_buffer) {
 	Buffer *buffer = _get_buffer_from_owner(p_buffer);
 	ERR_FAIL_NULL_V_MSG(buffer, nullptr, "Buffer argument is not a valid buffer of any type.");
 	direct_copy_count++;
-	return driver->buffer_persistent_map_advance(buffer->driver_id, frames_drawn);
+	uint8_t *mapped = driver->buffer_persistent_map_advance(buffer->driver_id, frames_drawn);
+	if (mapped != nullptr && buffer->terrain3d_hot_managed) {
+		buffer->terrain3d_persistent_map_frame = frames_drawn;
+	}
+	return mapped;
 }
 
 void RenderingDevice::buffer_flush(RID p_buffer) {
@@ -1508,6 +1629,9 @@ void RenderingDevice::buffer_flush(RID p_buffer) {
 	Buffer *buffer = _get_buffer_from_owner(p_buffer);
 	ERR_FAIL_NULL_MSG(buffer, "Buffer argument is not a valid buffer of any type.");
 	driver->buffer_flush(buffer->driver_id);
+	if (buffer->terrain3d_hot_managed) {
+		buffer->terrain3d_persistent_flush_frame = frames_drawn;
+	}
 }
 
 RID RenderingDevice::storage_buffer_create(uint32_t p_size_bytes, Span<uint8_t> p_data, BitField<StorageBufferUsage> p_usage, BitField<BufferCreationBits> p_creation_bits) {
@@ -8341,6 +8465,10 @@ void RenderingDevice::_begin_frame(bool p_presented) {
 }
 
 void RenderingDevice::_end_frame() {
+	// PREPARE recorded the transfer before GPU consumers. Fill staging before graph submission.
+	if (!_terrain3d_finalize_hot()) {
+		draw_graph.begin(); // Failure discards bridge-dependent scene commands.
+	}
 	if (draw_list.active) {
 		ERR_PRINT("Found open draw list at the end of the frame, this should never happen (further drawing will likely not work).");
 	}
@@ -8984,7 +9112,9 @@ uint64_t RenderingDevice::get_driver_resource(DriverResource p_resource, RID p_r
 			break;
 		case DRIVER_RESOURCE_TEXTURE:
 		case DRIVER_RESOURCE_TEXTURE_VIEW:
-		case DRIVER_RESOURCE_TEXTURE_DATA_FORMAT: {
+		case DRIVER_RESOURCE_TEXTURE_DATA_FORMAT:
+		case DRIVER_RESOURCE_TEXTURE_DEVICE_MEMORY:
+		case DRIVER_RESOURCE_TEXTURE_USAGE_FLAGS: {
 			Texture *tex = texture_owner.get_or_null(p_rid);
 			ERR_FAIL_NULL_V(tex, 0);
 
@@ -9186,6 +9316,11 @@ void RenderingDevice::finalize() {
 
 	// Free everything pending.
 	for (uint32_t i = 0; i < frames.size(); i++) {
+		if (frames[i].terrain3d_upload_staging) {
+			buffer_memory.sub(driver->buffer_get_allocation_size(frames[i].terrain3d_upload_staging));
+			driver->buffer_free(frames[i].terrain3d_upload_staging);
+		}
+
 		int f = (frame + i) % frames.size();
 		_free_pending_resources(f);
 		driver->command_pool_free(frames[i].command_pool);
@@ -9457,6 +9592,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("has_feature", "feature"), &RenderingDevice::has_feature);
 	ClassDB::bind_method(D_METHOD("limit_get", "limit"), &RenderingDevice::limit_get);
 	ClassDB::bind_method(D_METHOD("get_frame_delay"), &RenderingDevice::get_frame_delay);
+	ClassDB::bind_method(D_METHOD("get_frame_slot"), &RenderingDevice::get_frame_slot);
 	ClassDB::bind_method(D_METHOD("submit"), &RenderingDevice::submit);
 	ClassDB::bind_method(D_METHOD("sync"), &RenderingDevice::sync);
 

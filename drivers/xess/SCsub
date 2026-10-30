@@ -1,0 +1,27 @@
+#!/usr/bin/env python
+
+Import("env")
+
+thirdparty_vulkan_dir = "#thirdparty/vulkan"
+thirdparty_xess_dir = "#thirdparty/intel-xess"
+
+env_xess = env.Clone()
+
+# Godot source files.
+driver_obj = []
+
+if env["use_xess"]:
+    # Only the public XeSS headers are needed at build time; libxess.dll is loaded
+    # dynamically, so nothing links against the proprietary import library.
+    env_xess.Prepend(CPPPATH=[thirdparty_xess_dir + "/include"])
+
+    # XESS_ENABLED_VULKAN / XESS_ENABLED_D3D12 come from SConstruct; only the
+    # matching include paths are added here.
+    if env["vulkan"]:
+        env_xess.Prepend(CPPPATH=[thirdparty_vulkan_dir, thirdparty_vulkan_dir + "/include"])
+
+    if env["d3d12"]:
+        env_xess.Prepend(CPPPATH=["#thirdparty/directx_headers/include/directx"])
+
+env_xess.add_source_files(driver_obj, "*.cpp")
+env.drivers_sources += driver_obj

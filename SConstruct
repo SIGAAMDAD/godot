@@ -204,6 +204,9 @@ opts.Add(
 opts.Add(BoolVariable("forward_plus_renderer", "Enable the Forward+ renderer (requires RenderingDevice)", True))
 opts.Add(BoolVariable("forward_mobile_renderer", "Enable the Mobile renderer (requires RenderingDevice)", True))
 opts.Add(BoolVariable("vulkan", "Enable the Vulkan rendering driver", True))
+opts.Add(BoolVariable("use_xess", "Enable Intel XeSS Super Resolution on Windows Forward+", False))
+opts.Add(BoolVariable("use_streamline", "Enable NVIDIA Streamline DLSS on Windows Forward+", False))
+opts.Add("streamline_sdk_dir", "Exact NVIDIA Streamline v2.14.16 SDK directory", "")
 opts.Add(BoolVariable("opengl3", "Enable the OpenGL/GLES3 rendering driver", True))
 opts.Add(BoolVariable("d3d12", "Enable the Direct3D 12 rendering driver on supported platforms", False))
 opts.Add(BoolVariable("metal", "Enable the Metal rendering driver on supported platforms (Apple arm64 only)", False))
@@ -730,6 +733,29 @@ if not env["rendering_device"] or not (env["forward_mobile_renderer"] or env["fo
 # Must happen after the flags' definition, as configure is when most flags
 # are actually handled to change compile options, etc.
 detect.configure(env)
+# Native XeSS execution requires Forward+ and one of the Windows RD drivers.
+if env["use_xess"]:
+    if env["platform"] == "windows" and env["rendering_device"] and env["forward_plus_renderer"] and (env["vulkan"] or env["d3d12"]):
+        env.AppendUnique(CPPDEFINES=["XESS_ENABLED"])
+        if env["vulkan"]:
+            env.AppendUnique(CPPDEFINES=["XESS_ENABLED_VULKAN"])
+        if env["d3d12"]:
+            env.AppendUnique(CPPDEFINES=["XESS_ENABLED_D3D12"])
+    else:
+        env["use_xess"] = False
+
+
+# Streamline must be configured before driver and effect source compilation.
+if env["use_streamline"]:
+    if env["platform"] != "windows" or not env["rendering_device"] or not env["forward_plus_renderer"] or not (env["vulkan"] or env["d3d12"]):
+        print_error("NVIDIA Streamline DLSS requires Windows, Forward+, and Vulkan or D3D12.")
+        Exit(255)
+    sdk_root = env["streamline_sdk_dir"]
+    if not sdk_root or not os.path.isfile(os.path.join(sdk_root, "include", "sl_dlss.h")):
+        print_error("use_streamline=yes requires streamline_sdk_dir pointing to the exact NVIDIA v2.14.16 SDK.")
+        Exit(255)
+    env.AppendUnique(CPPDEFINES=["STREAMLINE_ENABLED"])
+    env.AppendUnique(CPPPATH=[os.path.join(sdk_root, "include")])
 
 platform_string = env["platform"]
 if env.get("simulator"):

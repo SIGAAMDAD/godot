@@ -29,6 +29,9 @@
 /**************************************************************************/
 
 #include "rendering_context_driver_d3d12.h"
+#ifdef STREAMLINE_ENABLED
+#include "drivers/streamline/streamline_runtime.h"
+#endif
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
@@ -140,6 +143,9 @@ Error RenderingContextDriverD3D12::_initialize_debug_layers() {
 }
 
 Error RenderingContextDriverD3D12::_create_dxgi_factory() {
+#ifdef STREAMLINE_ENABLED
+	StreamlineRuntime::get().initialize(false);
+#endif
 	const UINT dxgi_factory_flags = use_validation_layers() ? DXGI_CREATE_FACTORY_DEBUG : 0;
 
 	typedef HRESULT(WINAPI * PFN_DXGI_CREATE_DXGI_FACTORY2)(UINT, REFIID, void **);
@@ -148,7 +154,18 @@ Error RenderingContextDriverD3D12::_create_dxgi_factory() {
 
 	HRESULT res = dxgi_CreateDXGIFactory2(dxgi_factory_flags, IID_PPV_ARGS(&dxgi_factory));
 	ERR_FAIL_COND_V(!SUCCEEDED(res), ERR_CANT_CREATE);
-
+#ifdef STREAMLINE_ENABLED
+	// Streamline's proxy factory instruments swapchain creation and presentation.
+	// The engine continues to own the resulting interface via ComPtr.
+	if (StreamlineRuntime::get().is_initialized()) {
+		void *factory = dxgi_factory.Detach();
+		if (!StreamlineRuntime::get().upgrade_interface(&factory)) {
+			// On failure the original interface remains usable.
+			print_verbose("Streamline: DXGI proxy upgrade failed; DLSS presentation disabled.");
+		}
+		dxgi_factory.Attach((IDXGIFactory2 *)factory);
+	}
+#endif
 	return OK;
 }
 

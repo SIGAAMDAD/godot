@@ -37,6 +37,12 @@
 #include "core/version.h"
 #include "drivers/vulkan/rendering_device_driver_vulkan.h"
 #include "drivers/vulkan/vulkan_hooks.h"
+#ifdef STREAMLINE_ENABLED
+#include "drivers/streamline/streamline_runtime.h"
+#endif
+#ifdef XESS_ENABLED_VULKAN
+#include "drivers/xess/xess_context.h"
+#endif
 
 #ifndef DEV_ENABLED
 #include "core/os/os.h"
@@ -460,6 +466,38 @@ Error RenderingContextDriverVulkan::_initialize_instance_extensions() {
 		_register_requested_instance_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME, false);
 	}
 
+#ifdef STREAMLINE_ENABLED
+	StreamlineRuntime &sl_runtime = StreamlineRuntime::get();
+	if (sl_runtime.is_initialized() && sl_runtime.get_requirements) {
+		sl::FeatureRequirements requirements{};
+		if (sl_runtime.get_requirements(sl::kFeatureDLSS, requirements) == sl::Result::eOk) {
+			for (uint32_t i = 0; i < requirements.vkNumInstanceExtensions; i++) {
+				CharString ext(requirements.vkInstanceExtensions[i]);
+				if (!requested_instance_extensions.has(ext)) {
+					_register_requested_instance_extension(ext, false);
+				}
+			}
+		}
+	}
+#endif
+#ifdef XESS_ENABLED_VULKAN
+	// Request the instance extensions XeSS reports. This is where the runtime is
+	// first loaded; if it is missing, XeSS just stays unavailable.
+	if (XeSSContext::get().load_functions() && XeSSContext::get().has_vulkan()) {
+		uint32_t xess_extension_count = 0;
+		const char *const *xess_extensions = nullptr;
+		uint32_t xess_min_api_version = 0;
+		if (XeSSContext::get().xessVKGetRequiredInstanceExtensions(&xess_extension_count, &xess_extensions, &xess_min_api_version) == XESS_RESULT_SUCCESS) {
+			for (uint32_t i = 0; i < xess_extension_count; i++) {
+				CharString xess_extension = xess_extensions[i];
+				if (!requested_instance_extensions.has(xess_extension)) {
+					_register_requested_instance_extension(xess_extension, false);
+				}
+			}
+		}
+	}
+#endif
+
 	// Load instance extensions that are available.
 	uint32_t instance_extension_count = 0;
 	VkResult err = vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, nullptr);
@@ -700,6 +738,23 @@ Error RenderingContextDriverVulkan::_initialize_instance() {
 	// to anything but 1.0. Note that this value is only used by validation layers to warn us about version issues.
 	uint32_t application_api_version = instance_api_version == VK_API_VERSION_1_0 ? VK_API_VERSION_1_0 : VK_API_VERSION_1_2;
 
+#ifdef XESS_ENABLED_VULKAN
+	// XeSS may need a newer Vulkan API version than Godot targets. Raise it to the
+	// minimum the runtime reports, bounded by what the instance supports. The
+	// Vulkan 1.0 case is left alone.
+	if (application_api_version != VK_API_VERSION_1_0 && XeSSContext::get().has_vulkan()) {
+		uint32_t xess_extension_count = 0;
+		const char *const *xess_extensions = nullptr;
+		uint32_t xess_min_api_version = 0;
+		if (XeSSContext::get().xessVKGetRequiredInstanceExtensions(&xess_extension_count, &xess_extensions, &xess_min_api_version) == XESS_RESULT_SUCCESS) {
+			if (xess_min_api_version > application_api_version && xess_min_api_version <= instance_api_version) {
+				application_api_version = xess_min_api_version;
+				print_verbose(vformat("Intel XeSS: raised Vulkan application API version to %d.%d to satisfy the XeSS runtime.", VK_API_VERSION_MAJOR(application_api_version), VK_API_VERSION_MINOR(application_api_version)));
+			}
+		}
+	}
+#endif
+
 	CharString cs = GLOBAL_GET("application/config/name").operator String().utf8();
 	VkApplicationInfo app_info = {};
 	app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -904,6 +959,9 @@ Error RenderingContextDriverVulkan::_create_vulkan_instance(const VkInstanceCrea
 
 Error RenderingContextDriverVulkan::initialize() {
 	Error err;
+#ifdef STREAMLINE_ENABLED
+	StreamlineRuntime::get().initialize(true);
+#endif
 
 #ifdef USE_VOLK
 	if (volkInitialize() != VK_SUCCESS) {
@@ -1049,7 +1107,19 @@ bool RenderingContextDriverVulkan::surface_get_needs_resize(SurfaceID p_surface)
 
 void RenderingContextDriverVulkan::surface_destroy(SurfaceID p_surface) {
 	Surface *surface = (Surface *)(p_surface);
-	vkDestroySurfaceKHR(instance, surface->vk_surface, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR));
+	PFN_vkDestroySurfaceKHR destroy_surface = vkDestroySurfaceKHR;
+#ifdef STREAMLINE_ENABLED
+	if (StreamlineRuntime::get().is_initialized()) {
+		PFN_vkGetInstanceProcAddr proxy_get = StreamlineRuntime::get().get_vulkan_instance_proc_addr();
+		if (proxy_get) {
+			PFN_vkDestroySurfaceKHR proxy_destroy = (PFN_vkDestroySurfaceKHR)proxy_get(instance, "vkDestroySurfaceKHR");
+			if (proxy_destroy != nullptr) {
+				destroy_surface = proxy_destroy;
+			}
+		}
+	}
+#endif
+	destroy_surface(instance, surface->vk_surface, get_allocation_callbacks(VK_OBJECT_TYPE_SURFACE_KHR));
 	memdelete(surface);
 }
 

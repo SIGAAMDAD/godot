@@ -35,6 +35,9 @@
 #include "core/os/os.h"
 #include "drivers/d3d12/d3d12_hooks.h"
 #include "drivers/d3d12/rendering_context_driver_d3d12.h"
+#ifdef STREAMLINE_ENABLED
+#include "drivers/streamline/streamline_runtime.h"
+#endif
 
 #include <drivers/d3d12/godot_d3d12ma.h>
 #include <drivers/d3d12/godot_nir.h>
@@ -2608,7 +2611,13 @@ RDD::CommandQueueID RenderingDeviceDriverD3D12::command_queue_create(CommandQueu
 	ComPtr<ID3D12CommandQueue> d3d_queue;
 	D3D12_COMMAND_QUEUE_DESC queue_desc = {};
 	queue_desc.Type = (D3D12_COMMAND_LIST_TYPE)(p_cmd_queue_family.id - 1);
-	HRESULT res = device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(d3d_queue.GetAddressOf()));
+	ID3D12Device *queue_device = device.Get();
+#ifdef STREAMLINE_ENABLED
+	if (streamline_device_proxy) {
+		queue_device = streamline_device_proxy.Get();
+	}
+#endif
+	HRESULT res = queue_device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(d3d_queue.GetAddressOf()));
 	ERR_FAIL_COND_V(!SUCCEEDED(res), CommandQueueID());
 
 	if (p_identify_as_main_queue && D3D12Hooks::get_singleton() != nullptr) {
@@ -5887,6 +5896,28 @@ void RenderingDeviceDriverD3D12::command_insert_breadcrumb(CommandBufferID p_cmd
 /**** SUBMISSION ****/
 /********************/
 
+void *RenderingDeviceDriverD3D12::command_buffer_get_native_handle(CommandBufferID p_cmd_buffer) {
+	const CommandBufferInfo *cmd_buf_info = (const CommandBufferInfo *)p_cmd_buffer.id;
+	return (void *)cmd_buf_info->cmd_list.Get();
+}
+
+void RenderingDeviceDriverD3D12::command_buffer_invalidate_bound_state(CommandBufferID p_cmd_buffer) {
+	// An external SDK recording into this command list leaves its own pipeline state,
+	// root signature and descriptor heaps bound. Clear the caches this driver uses to
+	// skip redundant binds so the next command rebinds everything.
+	CommandBufferInfo *cmd_buf_info = (CommandBufferInfo *)p_cmd_buffer.id;
+	cmd_buf_info->graphics_pso = nullptr;
+	cmd_buf_info->graphics_root_signature_crc = 0;
+	cmd_buf_info->compute_pso = nullptr;
+	cmd_buf_info->compute_root_signature_crc = 0;
+	cmd_buf_info->pending_dyn_params = true;
+	cmd_buf_info->descriptor_heaps_set = false;
+}
+
+/********************/
+/**** SUBMISSION ****/
+/********************/
+
 void RenderingDeviceDriverD3D12::begin_segment(uint32_t p_frame_index, uint32_t p_frames_drawn) {
 	frame_idx = p_frame_index;
 	frames[frame_idx].descriptor_allocation_count = 0;
@@ -6174,6 +6205,10 @@ RenderingDeviceDriverD3D12::RenderingDeviceDriverD3D12(RenderingContextDriverD3D
 }
 
 RenderingDeviceDriverD3D12::~RenderingDeviceDriverD3D12() {
+#ifdef STREAMLINE_ENABLED
+	streamline_device_proxy.Reset();
+	StreamlineRuntime::get().shutdown();
+#endif
 	rtv_descriptor_heap_pool.free(null_rtv_alloc);
 
 	{
@@ -6214,6 +6249,9 @@ bool RenderingDeviceDriverD3D12::is_in_developer_mode() {
 
 Error RenderingDeviceDriverD3D12::_initialize_device() {
 	HRESULT res;
+#ifdef STREAMLINE_ENABLED
+	StreamlineRuntime::get().initialize(false);
+#endif
 
 	if (is_in_developer_mode()) {
 		typedef HRESULT(WINAPI * PFN_D3D12_ENABLE_EXPERIMENTAL_FEATURES)(_In_ UINT, _In_count_(NumFeatures) const IID *, _In_opt_count_(NumFeatures) void *, _In_opt_count_(NumFeatures) UINT *);
@@ -6256,6 +6294,27 @@ Error RenderingDeviceDriverD3D12::_initialize_device() {
 		res = d3d_D3D12CreateDevice(adapter.Get(), requested_feature_level, IID_PPV_ARGS(device.GetAddressOf()));
 	}
 	ERR_FAIL_COND_V_MSG(!SUCCEEDED(res), ERR_CANT_CREATE, "D3D12CreateDevice failed with error " + vformat("0x%08ux", (uint64_t)res) + ".");
+#ifdef STREAMLINE_ENABLED
+	if (StreamlineRuntime::get().is_initialized()) {
+		DXGI_ADAPTER_DESC1 desc{};
+		if (adapter && SUCCEEDED(adapter->GetDesc1(&desc))) {
+			if (StreamlineRuntime::get().bind_d3d12(device.Get(), &desc.AdapterLuid)) {
+				ID3D12Device *proxy = device.Get();
+				proxy->AddRef();
+				if (StreamlineRuntime::get().upgrade_interface((void **)&proxy)) {
+					// Upgrade may replace the interface. Release the temporary native
+					// reference when the proxy owns a different COM interface.
+					if (proxy != device.Get()) {
+						device.Get()->Release();
+					}
+					streamline_device_proxy.Attach(proxy);
+				} else {
+					proxy->Release();
+				}
+			}
+		}
+	}
+#endif
 
 	if (D3D12Hooks::get_singleton() != nullptr) {
 		D3D12Hooks::get_singleton()->set_device(device.Get());

@@ -260,6 +260,8 @@ public:
 #endif
 	};
 
+	virtual bool buffer_supports_persistent_hot() const override { return true; }
+	virtual uint64_t buffer_get_terrain3d_persistent_backing_size(uint32_t p_size) const override;
 	virtual BufferID buffer_create(uint64_t p_size, BitField<BufferUsageBits> p_usage, MemoryAllocationType p_allocation_type, uint64_t p_frames_drawn) override final;
 	virtual bool buffer_set_texel_format(BufferID p_buffer, DataFormat p_format) override final;
 	virtual void buffer_free(BufferID p_buffer) override final;
@@ -775,6 +777,7 @@ public:
 	/**** DEBUG *****/
 	/****************/
 	virtual void command_insert_breadcrumb(CommandBufferID p_cmd_buffer, uint32_t p_data) override final;
+	virtual void *command_buffer_get_native_handle(CommandBufferID p_cmd_buffer) override final;
 	void print_lost_device_info();
 	void on_device_lost() const;
 	static String get_vulkan_result(VkResult err);
@@ -792,6 +795,12 @@ public:
 
 	virtual void set_object_name(ObjectType p_type, ID p_driver_id, const String &p_name) override final;
 	virtual uint64_t get_resource_native_handle(DriverResource p_type, ID p_driver_id) override final;
+#ifdef XESS_ENABLED_VULKAN
+	VkInstance vulkan_instance_get() const { return context_driver != nullptr ? context_driver->instance_get() : VK_NULL_HANDLE; }
+	VkPhysicalDevice vulkan_physical_device_get() const { return physical_device; }
+	VkDevice vulkan_device_get() const { return vk_device; }
+#endif
+
 	virtual uint64_t get_total_memory_used() override final;
 	virtual uint64_t get_lazily_memory_used() override final;
 	virtual uint64_t limit_get(Limit p_limit) override final;

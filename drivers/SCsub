@@ -56,6 +56,10 @@ if env["rendering_device"]:
             print_error("Target platform '{}' does not support the Metal rendering driver".format(env["platform"]))
             Exit(255)
         SConscript("metal/SCsub")
+    if env.get("use_xess", False):
+        SConscript("xess/SCsub")
+    if env.get("use_streamline", False):
+        SConscript("streamline/SCsub")
 if env["opengl3"]:
     SConscript("gl_context/SCsub")
     SConscript("gles3/SCsub")

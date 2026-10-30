@@ -34,10 +34,13 @@
 #include "servers/rendering/multi_uma_buffer.h"
 #include "servers/rendering/renderer_rd/cluster_builder_rd.h"
 #include "servers/rendering/renderer_rd/effects/fsr2.h"
+#include "drivers/xess/xess.h"
+#include "servers/rendering/renderer_rd/effects/dlss.h"
 #include "servers/rendering/renderer_rd/effects/motion_vectors_store.h"
 #include "servers/rendering/renderer_rd/effects/ss_effects.h"
 #include "servers/rendering/renderer_rd/effects/taa.h"
 #include "servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h"
+#include "servers/rendering/renderer_rd/forward_clustered/terrain3d_forward_plus_bridge.h"
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/best_fit_normal.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/integrate_dfg.glsl.gen.h"
@@ -96,6 +99,10 @@ public:
 	private:
 		RenderSceneBuffersRD *render_buffers = nullptr;
 		RendererRD::FSR2Context *fsr2_context = nullptr;
+#ifdef XESS_ENABLED
+		Vector<RendererRD::XeSSScalerContext *> xess_contexts;
+#endif
+		bool terrain3d_previous_depth_valid = false;
 #ifdef METAL_MFXTEMPORAL_ENABLED
 		RendererRD::MFXTemporalContext *mfx_temporal_context = nullptr;
 #endif
@@ -145,6 +152,15 @@ public:
 
 		void ensure_fsr2(RendererRD::FSR2Effect *p_effect);
 		RendererRD::FSR2Context *get_fsr2_context() const { return fsr2_context; }
+#ifdef STREAMLINE_ENABLED
+		Vector<RendererRD::DLSSContext *> dlss_contexts;
+		bool ensure_dlss(RendererRD::DLSSEffect *p_effect, uint32_t p_view_count);
+		RendererRD::DLSSContext *get_dlss_context(uint32_t p_view) const { return p_view < (uint32_t)dlss_contexts.size() ? dlss_contexts[p_view] : nullptr; }
+#endif
+#ifdef XESS_ENABLED
+		bool ensure_xess(RendererRD::XeSSEffect *p_effect, uint32_t p_view_count);
+		RendererRD::XeSSScalerContext *get_xess_context(uint32_t p_view) const { return p_view < (uint32_t)xess_contexts.size() ? xess_contexts[p_view] : nullptr; }
+#endif
 
 #ifdef METAL_MFXTEMPORAL_ENABLED
 		bool ensure_mfx_temporal(RendererRD::MFXTemporalEffect *p_effect);
@@ -157,6 +173,8 @@ public:
 		RID get_specular_only_fb();
 		RID get_velocity_only_fb();
 
+		bool is_terrain3d_previous_depth_valid() const { return terrain3d_previous_depth_valid; }
+		void set_terrain3d_previous_depth_valid(bool p_valid) { terrain3d_previous_depth_valid = p_valid; }
 		virtual void configure(RenderSceneBuffersRD *p_render_buffers) override;
 		virtual void free_data() override;
 
@@ -452,6 +470,7 @@ private:
 			bool flip_cull;
 
 			uint32_t uniform_buffer_index;
+			t3dBridgeShadow terrain3d_bridge_shadow = {};
 		};
 
 		LocalVector<ShadowPass> shadow_passes;
@@ -489,7 +508,21 @@ private:
 	template <PassMode p_pass_mode, uint32_t p_color_pass_flags = 0>
 	_FORCE_INLINE_ void _render_list_template(RenderingDevice::DrawListID p_draw_list, RenderingDevice::FramebufferFormatID p_framebuffer_Format, RenderListParameters *p_params, uint32_t p_from_element, uint32_t p_to_element);
 	void _render_list(RenderingDevice::DrawListID p_draw_list, RenderingDevice::FramebufferFormatID p_framebuffer_Format, RenderListParameters *p_params, uint32_t p_from_element, uint32_t p_to_element);
-	void _render_list_with_draw_list(RenderListParameters *p_params, RID p_framebuffer, BitField<RD::DrawFlags> p_draw_flags = RD::DRAW_DEFAULT_ALL, const Vector<Color> &p_clear_color_values = Vector<Color>(), float p_clear_depth_value = 0.0, uint32_t p_clear_stencil_value = 0, const Rect2 &p_region = Rect2());
+	void _render_list_with_draw_list(RenderListParameters *p_params, RID p_framebuffer, BitField<RD::DrawFlags> p_draw_flags = RD::DRAW_DEFAULT_ALL, const Vector<Color> &p_clear_color_values = Vector<Color>(), float p_clear_depth_value = 0.0, uint32_t p_clear_stencil_value = 0, const Rect2 &p_region = Rect2(), t3dBridgePassKind p_terrain3d_pass_kind = T3D_BRIDGE_PASS_INVALID, t3dBridgeShadow *p_terrain3d_shadow = nullptr);
+
+	t3dBridgeFrame terrain3d_bridge_frame = {};
+	t3dBridgeSceneResources terrain3d_bridge_resources = {};
+	Terrain3DForwardPlusBridge::RenderThreadHandle terrain3d_bridge_callback_handle = 0;
+	bool terrain3d_bridge_frame_valid = false;
+	bool terrain3d_bridge_frame_pending = false;
+	bool terrain3d_bridge_resources_pending = true;
+	bool terrain3d_bridge_resources_ready = false;
+	uint64_t terrain3d_bridge_frame_generation = 0;
+	uint64_t terrain3d_bridge_pass_serial = 0;
+	bool terrain3d_bridge_depth_prepass_active = false;
+	void _terrain3d_bridge_begin_frame(const RenderDataRD *p_render_data, const Size2i &p_screen_size, uint32_t p_sample_count, bool p_is_reflection_probe);
+	void _terrain3d_bridge_update_environment(const RenderDataRD *p_render_data);
+	void _terrain3d_bridge_update_resources(const RenderDataRD *p_render_data, RID p_radiance_texture, RID p_previous_depth_texture);
 
 	void _fill_instance_data(RenderListType p_render_list, int *p_render_info = nullptr, uint32_t p_offset = 0, int32_t p_max_elements = -1, bool p_update_buffer = true);
 	void _fill_render_list(RenderListType p_render_list, const RenderDataRD *p_render_data, PassMode p_pass_mode, bool p_using_sdfgi = false, bool p_using_opaque_gi = false, bool p_using_motion_pass = false, bool p_append = false);
@@ -763,6 +796,12 @@ private:
 
 	RendererRD::TAA *taa = nullptr;
 	RendererRD::FSR2Effect *fsr2_effect = nullptr;
+#ifdef XESS_ENABLED
+	RendererRD::XeSSEffect *xess_effect = nullptr;
+#endif
+#ifdef STREAMLINE_ENABLED
+	RendererRD::DLSSEffect *dlss_effect = nullptr;
+#endif
 	RendererRD::SSEffects *ss_effects = nullptr;
 
 #ifdef METAL_MFXTEMPORAL_ENABLED
@@ -787,7 +826,7 @@ private:
 
 	void _render_shadow_pass(RID p_light, RID p_shadow_atlas, int p_pass, const PagedArray<RenderGeometryInstance *> &p_instances, float p_lod_distance_multiplier = 0, float p_screen_mesh_lod_threshold = 0.0, bool p_open_pass = true, bool p_close_pass = true, bool p_clear_region = true, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Size2i &p_viewport_size = Size2i(1, 1), const Transform3D &p_main_cam_transform = Transform3D());
 	void _render_shadow_begin();
-	void _render_shadow_append(RID p_framebuffer, const PagedArray<RenderGeometryInstance *> &p_instances, const Projection &p_projection, const Transform3D &p_transform, float p_zfar, float p_bias, float p_normal_bias, bool p_reverse_cull_face, bool p_use_dp, bool p_use_dp_flip, bool p_use_pancake, float p_lod_distance_multiplier = 0.0, float p_screen_mesh_lod_threshold = 0.0, const Rect2i &p_rect = Rect2i(), bool p_flip_y = false, bool p_clear_region = true, bool p_begin = true, bool p_end = true, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Size2i &p_viewport_size = Size2i(1, 1), const Transform3D &p_main_cam_transform = Transform3D());
+	void _render_shadow_append(RID p_framebuffer, const PagedArray<RenderGeometryInstance *> &p_instances, const Projection &p_projection, const Transform3D &p_transform, float p_zfar, float p_bias, float p_normal_bias, bool p_reverse_cull_face, bool p_use_dp, bool p_use_dp_flip, bool p_use_pancake, float p_lod_distance_multiplier = 0.0, float p_screen_mesh_lod_threshold = 0.0, const Rect2i &p_rect = Rect2i(), bool p_flip_y = false, bool p_clear_region = true, bool p_begin = true, bool p_end = true, RenderingServerTypes::RenderInfo *p_render_info = nullptr, const Size2i &p_viewport_size = Size2i(1, 1), const Transform3D &p_main_cam_transform = Transform3D(), uint32_t p_caster_mask = 0, uint32_t p_light_cull_mask = 0, uint32_t p_pass_index = 0);
 	void _render_shadow_process();
 	void _render_shadow_end();
 

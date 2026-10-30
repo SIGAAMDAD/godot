@@ -64,6 +64,9 @@
 #include "servers/movie_writer/movie_writer_pngwav.h"
 #ifdef RD_ENABLED
 #include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
+#ifdef FORWARD_RD_ENABLED
+#include "servers/rendering/renderer_rd/forward_clustered/terrain3d_forward_plus_bridge.h"
+#endif
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_data_rd.h"
@@ -128,6 +131,9 @@
 #endif // XR_DISABLED
 
 ShaderTypes *shader_types = nullptr;
+#ifdef FORWARD_RD_ENABLED
+static Terrain3DForwardPlusBridge *terrain3d_native_bridge = nullptr;
+#endif
 
 #ifndef PHYSICS_2D_DISABLED
 static PhysicsServer2D *_create_dummy_physics_server_2d() {
@@ -157,6 +163,10 @@ void register_server_types() {
 	OS::get_singleton()->benchmark_begin_measure("Servers", "Register Extensions");
 
 	shader_types = memnew(ShaderTypes);
+#ifdef FORWARD_RD_ENABLED
+	GDREGISTER_CLASS(Terrain3DForwardPlusBridge);
+	terrain3d_native_bridge = memnew(Terrain3DForwardPlusBridge);
+#endif
 
 	GDREGISTER_CLASS(TextServerManager);
 	GDREGISTER_ABSTRACT_CLASS(TextServer);
@@ -400,6 +410,10 @@ void unregister_server_types() {
 
 	ServersDebugger::deinitialize();
 	memdelete(shader_types);
+#ifdef FORWARD_RD_ENABLED
+	memdelete(terrain3d_native_bridge);
+	terrain3d_native_bridge = nullptr;
+#endif
 	if constexpr (GD_IS_CLASS_ENABLED(MovieWriterPNGWAV)) {
 		memdelete(writer_pngwav);
 	}
@@ -416,6 +430,9 @@ void register_server_singletons() {
 	Engine::get_singleton()->add_singleton(Engine::Singleton("DisplayServer", DisplayServer::get_singleton(), "DisplayServer"));
 	Engine::get_singleton()->add_singleton(Engine::Singleton("NativeMenu", NativeMenu::get_singleton(), "NativeMenu"));
 	Engine::get_singleton()->add_singleton(Engine::Singleton("RenderingServer", RenderingServer::get_singleton(), "RenderingServer"));
+#ifdef FORWARD_RD_ENABLED
+	Engine::get_singleton()->add_singleton(Engine::Singleton("Terrain3DForwardPlusBridge", Terrain3DForwardPlusBridge::get_singleton(), "Terrain3DForwardPlusBridge"));
+#endif
 #ifndef NAVIGATION_2D_DISABLED
 	Engine::get_singleton()->add_singleton(Engine::Singleton("NavigationServer2D", NavigationServer2D::get_singleton(), "NavigationServer2D"));
 #endif // NAVIGATION_2D_DISABLED
