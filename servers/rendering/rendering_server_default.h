@@ -32,6 +32,8 @@
 
 #include "core/object/worker_thread_pool.h"
 #include "core/os/thread.h"
+#include "core/os/mutex.h"
+#include "core/os/semaphore.h"
 #include "core/templates/command_queue_mt.h"
 #include "core/templates/hash_map.h"
 #include "servers/rendering/renderer_canvas_cull.h"
@@ -84,6 +86,15 @@ class RenderingServerDefault : public RenderingServer {
 	bool exit = false;
 	bool create_thread = false;
 
+	enum class CommandAdmissionState : uint8_t { STOPPED, RUNNING, DRAINING };
+	Mutex command_admission_mutex;
+	CommandAdmissionState command_admission = CommandAdmissionState::STOPPED;
+	struct SyncRenderRequest {
+		Callable callable;
+		Semaphore completed;
+	};
+	void _execute_sync_request(SyncRenderRequest *p_request);
+
 	void _assign_mt_ids(WorkerThreadPool::TaskID p_pump_task_id);
 	void _thread_exit();
 	void _thread_loop();
@@ -92,6 +103,7 @@ class RenderingServerDefault : public RenderingServer {
 	void _run_post_draw_steps();
 	void _init();
 	void _finish();
+	void _finalize_main_rendering_device();
 
 	void _free(RID p_rid);
 
@@ -1228,13 +1240,21 @@ public:
 	}
 
 	virtual void call_on_render_thread(const Callable &p_callable) override {
+		MutexLock lock(command_admission_mutex);
+		if (command_admission != CommandAdmissionState::RUNNING) {
+			return;
+		}
 		if (Thread::get_caller_id() == server_thread) {
+			// Never hold the admission lock while invoking external callbacks.
+			lock.temp_unlock();
 			command_queue.flush_if_pending();
 			p_callable.call();
 		} else {
 			command_queue.push(this, &RenderingServerDefault::_call_on_render_thread, p_callable);
 		}
 	}
+
+	virtual Error call_on_render_thread_sync(const Callable &p_callable) override;
 
 	/* TESTING */
 

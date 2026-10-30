@@ -45,6 +45,8 @@
 #include "servers/rendering/rendering_device_enums.h"
 #include "servers/rendering/rendering_device_graph.h"
 
+#include <atomic>
+
 class RDTextureFormat;
 class RDTextureView;
 class RDAttachmentFormat;
@@ -70,6 +72,16 @@ class RenderingDevice : public RenderingDeviceCommons {
 	_THREAD_SAFE_CLASS_
 
 private:
+	enum class LifecycleState : uint8_t {
+		UNINITIALIZED,
+		INITIALIZING,
+		ACTIVE,
+		FINALIZING,
+		FINALIZED,
+	};
+
+	std::atomic<LifecycleState> lifecycle_state{ LifecycleState::UNINITIALIZED };
+	bool driver_initialized = false;
 	Thread::ID render_thread_id;
 
 public:
@@ -2001,6 +2013,8 @@ public:
 	uint64_t get_frames_drawn() const { return frames_drawn; }
 	uint32_t get_frame_slot() const { return frame; }
 	bool is_on_render_thread() const { return render_thread_id == Thread::get_caller_id(); }
+	bool is_main_rendering_device() const { return is_main_instance; }
+	bool is_finalized() const { return lifecycle_state.load(std::memory_order_acquire) == LifecycleState::FINALIZED; }
 
 	bool is_composite_alpha_supported() const;
 

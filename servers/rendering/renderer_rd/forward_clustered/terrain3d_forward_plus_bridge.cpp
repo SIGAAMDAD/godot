@@ -73,40 +73,46 @@ void Terrain3DForwardPlusBridge::_dispatch_rd_request(int64_t p_request_address)
 					request.result = rd->_terrain3d_complete_hot();
 				}
 			} break;
+			case RD_PERSISTENT_ABI: {
+				request.result = rd->driver != nullptr && rd->driver->buffer_supports_persistent_hot() ? T3D_FORWARD_PERSISTENT_HOT_ABI : 0;
+			} break;
 			case RD_BACKING_SIZE: {
 				const uint64_t size = rd->_terrain3d_hot_backing_size(uint32_t(request.value));
 				request.result = size <= INT64_MAX ? int64_t(size) : 0;
 			} break;
 			case RD_CONFIGURE_STAGING: {
-				if (!has_native_callback()) {
+				if (!request.callback_registered) {
 					request.result = rd->_terrain3d_configure_staging(uint32_t(request.value)) == OK;
 				}
 			} break;
 			case RD_DEFAULT_STAGING: {
 				request.result = rd->terrain3d_upload_staging_capacity != 0 ||
-						(!has_native_callback() && rd->_terrain3d_configure_staging(2220032) == OK);
+						(!request.callback_registered && rd->_terrain3d_configure_staging(2220032) == OK);
 			} break;
 		}
 	}
-	request.done.post();
 }
 
 int64_t Terrain3DForwardPlusBridge::_request_rd(RDRequestKind p_kind, int64_t p_value) {
 	RenderingDevice *rd = RenderingDevice::get_singleton();
 	ERR_FAIL_NULL_V(rd, 0);
-	RDRequest request;
-	request.kind = p_kind;
-	request.value = p_value;
-	const int64_t address = int64_t(uintptr_t(&request));
+	RDRequest *request = memnew(RDRequest);
+	request->kind = p_kind;
+	request->value = p_value;
+	// Snapshot the bridge registration before dispatch. The queued closure never
+	// references this bridge or its native callback storage after retirement.
+	request->callback_registered = active_slot.load(std::memory_order_acquire) != nullptr;
+	const int64_t address = int64_t(uintptr_t(request));
+	Error result = OK;
 	if (rd->is_on_render_thread()) {
 		_dispatch_rd_request(address);
 	} else {
 		RenderingServer *server = RenderingServer::get_singleton();
-		ERR_FAIL_NULL_V(server, 0);
-		server->call_on_render_thread(callable_mp(this, &Terrain3DForwardPlusBridge::_dispatch_rd_request).bind(address));
-		request.done.wait();
+		result = server != nullptr ? server->call_on_render_thread_sync(callable_mp(this, &Terrain3DForwardPlusBridge::_dispatch_rd_request).bind(address)) : ERR_UNAVAILABLE;
 	}
-	return request.result;
+	const int64_t value = result == OK ? request->result : 0;
+	memdelete(request);
+	return value;
 }
 
 int64_t Terrain3DForwardPlusBridge::get_deferred_upload_abi_version() {
@@ -126,9 +132,8 @@ bool Terrain3DForwardPlusBridge::complete_native_hot_frame() {
 	return _request_rd(RD_COMPLETE) != 0;
 }
 
-int64_t Terrain3DForwardPlusBridge::get_persistent_hot_abi_version() const {
-	RenderingDevice *rd = RenderingDevice::get_singleton();
-	return rd != nullptr && rd->driver->buffer_supports_persistent_hot() ? T3D_FORWARD_PERSISTENT_HOT_ABI : 0;
+int64_t Terrain3DForwardPlusBridge::get_persistent_hot_abi_version() {
+	return _request_rd(RD_PERSISTENT_ABI);
 }
 
 int64_t Terrain3DForwardPlusBridge::get_native_hot_backing_size(int64_t p_logical_bytes) {

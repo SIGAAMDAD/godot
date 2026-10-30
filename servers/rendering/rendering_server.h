@@ -1056,6 +1056,8 @@ public:
 
 	virtual bool is_on_render_thread() = 0;
 	virtual void call_on_render_thread(const Callable &p_callable) = 0;
+	// C++-only, owning-render-thread rendezvous. Rejected work does not execute.
+	virtual Error call_on_render_thread_sync(const Callable &p_callable) = 0;
 
 	String get_current_rendering_driver_name() const;
 	String get_current_rendering_method() const;

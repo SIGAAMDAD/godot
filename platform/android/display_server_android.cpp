@@ -765,7 +765,7 @@ void DisplayServerAndroid::free_vulkan_global_context() {
 void DisplayServerAndroid::reset_window() {
 #if defined(RD_ENABLED)
 	if (rendering_context_global) {
-		if (rendering_device) {
+		if (rendering_device && !rendering_device->is_finalized()) {
 			rendering_device->screen_free(DisplayServerEnums::MAIN_WINDOW_ID);
 		}
 

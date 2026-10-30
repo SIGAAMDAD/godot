@@ -7541,7 +7541,7 @@ DisplayServerX11::~DisplayServerX11() {
 	//destroy all windows
 	for (KeyValue<DisplayServerEnums::WindowID, WindowData> &E : windows) {
 #if defined(RD_ENABLED)
-		if (rendering_device) {
+		if (rendering_device && !rendering_device->is_finalized()) {
 			rendering_device->screen_free(E.key);
 		}
 

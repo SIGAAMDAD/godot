@@ -198,7 +198,7 @@ void DisplayServerWayland::_delete_window(DisplayServerEnums::WindowID p_window_
 
 	if (wd.visible) {
 #ifdef VULKAN_ENABLED
-		if (rendering_device) {
+		if (rendering_device && !rendering_device->is_finalized()) {
 			rendering_device->screen_free(p_window_id);
 		}
 

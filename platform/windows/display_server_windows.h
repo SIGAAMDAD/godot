@@ -269,6 +269,30 @@ class DisplayServerWindows : public DisplayServer {
 #if defined(RD_ENABLED)
 	RenderingContextDriver *rendering_context = nullptr;
 	RenderingDevice *rendering_device = nullptr;
+	// Window generation protects queued resize operations from stale/reused HWNDs.
+	BinaryMutex gpu_window_generation_mutex;
+	HashMap<DisplayServerEnums::WindowID, uint64_t> gpu_window_generations;
+	struct GpuWindowResize {
+		uint64_t generation = 0;
+		int width = 0;
+		int height = 0;
+	};
+	HashMap<DisplayServerEnums::WindowID, GpuWindowResize> queued_gpu_window_resizes;
+	uint64_t next_gpu_window_generation = 1;
+
+	enum class WindowGpuOpKind : uint8_t { CREATE, RELEASE };
+	struct WindowGpuOp {
+		WindowGpuOpKind kind;
+		DisplayServerEnums::WindowID window;
+		uint64_t generation;
+		Error result = ERR_UNAVAILABLE;
+	};
+	Error _run_gpu_window_op(WindowGpuOpKind p_kind, DisplayServerEnums::WindowID p_window, uint64_t p_generation);
+	void _execute_gpu_window_op(int64_t p_address);
+	void _queue_gpu_window_resize(DisplayServerEnums::WindowID p_window, int p_width, int p_height);
+	void _resize_gpu_window(DisplayServerEnums::WindowID p_window, uint64_t p_generation);
+	uint64_t _register_gpu_window(DisplayServerEnums::WindowID p_window);
+	uint64_t _invalidate_gpu_window(DisplayServerEnums::WindowID p_window);
 #endif
 
 	RBMap<int, Vector2> touch_state;

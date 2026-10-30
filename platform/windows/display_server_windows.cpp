@@ -46,6 +46,7 @@
 #include "core/io/marshalls.h"
 #include "core/io/xml_parser.h"
 #include "core/object/callable_mp.h"
+#include "servers/rendering/rendering_server.h"
 #include "core/os/main_loop.h"
 #include "core/os/os.h"
 #include "core/version.h"
@@ -1906,7 +1907,7 @@ DisplayServerEnums::WindowID DisplayServerWindows::create_sub_window(DisplayServ
 	no_redirection_bitmap = OS::get_singleton()->is_layered_allowed() && rendering_driver == "d3d12";
 #endif
 
-	DisplayServerEnums::WindowID window_id = window_id_counter;
+	window_id = window_id_counter;
 	Error err = _create_window(window_id, p_mode, p_flags, p_rect, p_exclusive, p_transient_parent, nullptr, no_redirection_bitmap);
 	ERR_FAIL_COND_V_MSG(err != OK, DisplayServerEnums::INVALID_WINDOW_ID, "Failed to create sub window.");
 	++window_id_counter;
@@ -1983,7 +1984,22 @@ DisplayServerEnums::WindowID DisplayServerWindows::create_sub_window(DisplayServ
 		SendMessage(windows[window_id].hWnd, WM_SETICON, ICON_BIG, (LPARAM)mainwindow_icon);
 	}
 #ifdef RD_ENABLED
-	if (rendering_device) {
+	if (rendering_device && rendering_driver == "vulkan") {
+		const uint64_t generation = _register_gpu_window(window_id);
+		_thread_safe_method_.temp_unlock();
+		const Error err = _run_gpu_window_op(WindowGpuOpKind::CREATE, window_id, generation);
+		if (err != OK) {
+			_invalidate_gpu_window(window_id);
+			_thread_safe_method_.temp_relock();
+			if (rendering_context) {
+				rendering_context->window_destroy(window_id);
+			}
+			_destroy_window(window_id);
+			ERR_FAIL_V_MSG(DisplayServerEnums::INVALID_WINDOW_ID, "Failed to create a GPU swapchain for the subwindow.");
+		}
+		_thread_safe_method_.temp_relock();
+	} else if (rendering_device) {
+		// Preserve the existing D3D12 bootstrap/window contract.
 		rendering_device->screen_create(window_id);
 	}
 #endif
@@ -2063,12 +2079,19 @@ void DisplayServerWindows::delete_sub_window(DisplayServerEnums::WindowID p_wind
 	if (wd.transient_parent != DisplayServerEnums::INVALID_WINDOW_ID) {
 		window_set_transient(p_window, DisplayServerEnums::INVALID_WINDOW_ID);
 	}
-
 #ifdef RD_ENABLED
-	if (rendering_device) {
+	if (rendering_device && !rendering_device->is_finalized() && rendering_driver == "vulkan") {
+		const uint64_t generation = _invalidate_gpu_window(p_window);
+		_thread_safe_method_.temp_unlock();
+		const Error err = _run_gpu_window_op(WindowGpuOpKind::RELEASE, p_window, generation);
+		_thread_safe_method_.temp_relock();
+		ERR_FAIL_COND_MSG(err != OK, "Could not release GPU swapchain before native window destruction.");
+	} else if (rendering_device && !rendering_device->is_finalized()) {
 		rendering_device->screen_free(p_window);
 	}
+#endif
 
+#ifdef RD_ENABLED
 	if (rendering_context) {
 		rendering_context->window_destroy(p_window);
 	}
@@ -6775,8 +6798,12 @@ LRESULT DisplayServerWindows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 				}
 #if defined(RD_ENABLED)
 				if (window.create_completed && rendering_context && window.rendering_context_window_created) {
-					// Note: Trigger resize event to update swapchains when window is minimized/restored, even if size is not changed.
-					rendering_context->window_set_size(window_id, window.width + off.x, window.height + off.y);
+					// Coalesce on the render command stream; never wait from WndProc.
+					if (rendering_driver == "vulkan" && rendering_device != nullptr) {
+						_queue_gpu_window_resize(window_id, window.width + off.x, window.height + off.y);
+					} else {
+						rendering_context->window_set_size(window_id, window.width + off.x, window.height + off.y);
+					}
 				}
 #endif
 #if defined(GLES3_ENABLED)
@@ -8450,6 +8477,9 @@ DisplayServerWindows::DisplayServerWindows(const String &p_rendering_driver, Dis
 		DEV_ASSERT(rendering_device != nullptr);
 
 		rendering_device->screen_create(DisplayServerEnums::MAIN_WINDOW_ID);
+		if (rendering_driver == "vulkan") {
+			_register_gpu_window(DisplayServerEnums::MAIN_WINDOW_ID);
+		}
 
 		RendererCompositorRD::make_current();
 	}
@@ -8549,6 +8579,106 @@ void DisplayServerWindows::register_windows_driver() {
 	register_create_function("windows", create_func, get_rendering_drivers_func);
 }
 
+#ifdef RD_ENABLED
+uint64_t DisplayServerWindows::_register_gpu_window(DisplayServerEnums::WindowID p_window) {
+	MutexLock lock(gpu_window_generation_mutex);
+	const uint64_t generation = next_gpu_window_generation++;
+	gpu_window_generations[p_window] = generation;
+	return generation;
+}
+
+uint64_t DisplayServerWindows::_invalidate_gpu_window(DisplayServerEnums::WindowID p_window) {
+	MutexLock lock(gpu_window_generation_mutex);
+	const uint64_t *found = gpu_window_generations.getptr(p_window);
+	const uint64_t generation = found != nullptr ? *found : 0;
+	gpu_window_generations.erase(p_window);
+	queued_gpu_window_resizes.erase(p_window);
+	return generation;
+}
+
+void DisplayServerWindows::_queue_gpu_window_resize(DisplayServerEnums::WindowID p_window, int p_width, int p_height) {
+	RenderingServer *server = RenderingServer::get_singleton();
+	if (server == nullptr) {
+		// Window bootstrapping precedes the rendering-worker startup.
+		rendering_context->window_set_size(p_window, p_width, p_height);
+		return;
+	}
+	uint64_t generation = 0;
+	bool must_enqueue = false;
+	{
+		MutexLock lock(gpu_window_generation_mutex);
+		const uint64_t *found = gpu_window_generations.getptr(p_window);
+		if (found == nullptr) {
+			return;
+		}
+		generation = *found;
+		GpuWindowResize *queued = queued_gpu_window_resizes.getptr(p_window);
+		if (queued == nullptr || queued->generation != generation) {
+			queued_gpu_window_resizes[p_window] = GpuWindowResize{ generation, p_width, p_height };
+			must_enqueue = true;
+		} else {
+			queued->width = p_width;
+			queued->height = p_height;
+		}
+	}
+	if (must_enqueue) {
+		server->call_on_render_thread(callable_mp(this, &DisplayServerWindows::_resize_gpu_window).bind(p_window, generation));
+	}
+}
+
+void DisplayServerWindows::_resize_gpu_window(DisplayServerEnums::WindowID p_window, uint64_t p_generation) {
+	GpuWindowResize resize;
+	bool is_valid = false;
+	{
+		MutexLock lock(gpu_window_generation_mutex);
+		const uint64_t *found = gpu_window_generations.getptr(p_window);
+		GpuWindowResize *queued = queued_gpu_window_resizes.getptr(p_window);
+		if (found != nullptr && *found == p_generation && queued != nullptr && queued->generation == p_generation) {
+			resize = *queued;
+			is_valid = true;
+			queued_gpu_window_resizes.erase(p_window);
+		}
+	}
+	if (is_valid && rendering_context != nullptr && rendering_device != nullptr && !rendering_device->is_finalized()) {
+		rendering_context->window_set_size(p_window, resize.width, resize.height);
+	}
+}
+
+void DisplayServerWindows::_execute_gpu_window_op(int64_t p_address) {
+	WindowGpuOp *request = reinterpret_cast<WindowGpuOp *>(uintptr_t(uint64_t(p_address)));
+	if (rendering_device == nullptr || rendering_device->is_finalized()) {
+		request->result = request->kind == WindowGpuOpKind::RELEASE ? OK : ERR_UNAVAILABLE;
+		return;
+	}
+	if (request->kind == WindowGpuOpKind::CREATE) {
+		bool is_valid = false;
+		{
+			MutexLock lock(gpu_window_generation_mutex);
+			const uint64_t *found = gpu_window_generations.getptr(request->window);
+			is_valid = found != nullptr && *found == request->generation;
+		}
+		if (!is_valid) {
+			request->result = ERR_UNAVAILABLE;
+			return;
+		}
+		request->result = rendering_device->screen_create(request->window);
+	} else {
+		request->result = rendering_device->screen_free(request->window);
+	}
+}
+
+Error DisplayServerWindows::_run_gpu_window_op(WindowGpuOpKind p_kind, DisplayServerEnums::WindowID p_window, uint64_t p_generation) {
+	WindowGpuOp request{ p_kind, p_window, p_generation };
+	RenderingServer *rs = RenderingServer::get_singleton();
+	if (rs != nullptr && !rs->is_on_render_thread()) {
+		const Error queued = rs->call_on_render_thread_sync(callable_mp(this, &DisplayServerWindows::_execute_gpu_window_op).bind(int64_t(uintptr_t(&request))));
+		return queued == OK ? request.result : queued;
+	}
+	_execute_gpu_window_op(int64_t(uintptr_t(&request)));
+	return request.result;
+}
+#endif // RD_ENABLED
+
 DisplayServerWindows::~DisplayServerWindows() {
 	LocalVector<List<FileDialogData *>::Element *> to_remove;
 	for (List<FileDialogData *>::Element *E = file_dialogs.front(); E; E = E->next()) {
@@ -8616,7 +8746,7 @@ DisplayServerWindows::~DisplayServerWindows() {
 
 	if (windows.has(DisplayServerEnums::MAIN_WINDOW_ID)) {
 #ifdef RD_ENABLED
-		if (rendering_device) {
+		if (rendering_device && !rendering_device->is_finalized()) {
 			rendering_device->screen_free(DisplayServerEnums::MAIN_WINDOW_ID);
 		}
 

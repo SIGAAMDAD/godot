@@ -7,7 +7,6 @@
 #include "core/object/class_db.h"
 #include "core/object/object.h"
 #include "core/os/mutex.h"
-#include "core/os/semaphore.h"
 #include "core/templates/list.h"
 #include "servers/rendering/renderer_rd/forward_clustered/terrain3d_forward_plus_bridge_abi.h"
 
@@ -50,12 +49,12 @@ class Terrain3DForwardPlusBridge : public Object {
 	bool _begin_prepare(NativeCallbackSlot *p_slot, uint64_t p_render_frame) const;
 	static void _fill_deferred_upload(void *p_userdata, uint8_t *p_data, uint32_t p_size);
 
-	enum RDRequestKind { RD_COMPLETE, RD_BACKING_SIZE, RD_CONFIGURE_STAGING, RD_DEFAULT_STAGING };
+	enum RDRequestKind { RD_COMPLETE, RD_BACKING_SIZE, RD_CONFIGURE_STAGING, RD_DEFAULT_STAGING, RD_PERSISTENT_ABI };
 	struct RDRequest {
-		Semaphore done;
 		RDRequestKind kind;
 		int64_t value = 0;
 		int64_t result = 0;
+		bool callback_registered = false;
 	};
 	void _dispatch_rd_request(int64_t p_request_address);
 	int64_t _request_rd(RDRequestKind p_kind, int64_t p_value = 0);
@@ -74,7 +73,7 @@ public:
 	int64_t get_deferred_upload_abi_version();
 	int64_t get_native_device_frame() const;
 	bool complete_native_hot_frame();
-	int64_t get_persistent_hot_abi_version() const;
+	int64_t get_persistent_hot_abi_version();
 	int64_t get_native_hot_backing_size(int64_t p_logical_bytes);
 	bool configure_native_hot_staging(int64_t p_logical_bytes);
 	bool defer_native_buffer_flush(RID p_buffer, int64_t p_seal_address, int64_t p_user_data_address);

@@ -782,7 +782,7 @@ void DisplayServerMacOS::window_destroy(DisplayServerEnums::WindowID p_window) {
 	}
 #endif
 #ifdef RD_ENABLED
-	if (rendering_device) {
+	if (rendering_device && !rendering_device->is_finalized()) {
 		rendering_device->screen_free(p_window);
 	}
 

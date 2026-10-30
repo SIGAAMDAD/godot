@@ -5632,6 +5632,7 @@ uint32_t RenderingDevice::_get_swap_chain_desired_count() const {
 }
 
 Error RenderingDevice::screen_create(DisplayServerEnums::WindowID p_screen) {
+	ERR_FAIL_COND_V(lifecycle_state.load(std::memory_order_acquire) != LifecycleState::ACTIVE, ERR_UNAVAILABLE);
 	_THREAD_SAFE_METHOD_
 
 	RenderingContextDriver::SurfaceID surface = context->surface_get_from_window(p_screen);
@@ -5649,6 +5650,7 @@ Error RenderingDevice::screen_create(DisplayServerEnums::WindowID p_screen) {
 }
 
 Error RenderingDevice::screen_prepare_for_drawing(DisplayServerEnums::WindowID p_screen) {
+	ERR_FAIL_COND_V(lifecycle_state.load(std::memory_order_acquire) != LifecycleState::ACTIVE, ERR_UNAVAILABLE);
 	_THREAD_SAFE_METHOD_
 
 	// After submitting work, acquire the swapchain image(s).
@@ -5762,6 +5764,7 @@ bool RenderingDevice::screen_get_hdr_output_supported(DisplayServerEnums::Window
 }
 
 Error RenderingDevice::screen_free(DisplayServerEnums::WindowID p_screen) {
+	ERR_FAIL_COND_V(is_finalized(), ERR_UNAVAILABLE);
 	_THREAD_SAFE_METHOD_
 
 	HashMap<DisplayServerEnums::WindowID, RDD::SwapChainID>::ConstIterator it = screen_swap_chains.find(p_screen);
@@ -8730,6 +8733,7 @@ void RenderingDevice::_flush_and_stall_for_all_frames(bool p_begin_frame) {
 
 Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServerEnums::WindowID p_main_window) {
 	ERR_RENDER_THREAD_GUARD_V(ERR_UNAVAILABLE);
+	ERR_FAIL_COND_V(lifecycle_state.load(std::memory_order_acquire) != LifecycleState::UNINITIALIZED, ERR_ALREADY_IN_USE);
 
 	Error err;
 	RenderingContextDriver::SurfaceID main_surface = 0;
@@ -8741,7 +8745,9 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 	}
 
 	context = p_context;
+	lifecycle_state.store(LifecycleState::INITIALIZING, std::memory_order_release);
 	driver = context->driver_create();
+	ERR_FAIL_NULL_V(driver, ERR_CANT_CREATE);
 
 	print_verbose("Devices:");
 	int32_t device_index = Engine::get_singleton()->get_gpu_index();
@@ -8785,6 +8791,7 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 	device = context->device_get(device_index);
 	err = driver->initialize(device_index, frame_count);
 	ERR_FAIL_COND_V_MSG(err != OK, FAILED, "Failed to initialize driver for device.");
+	driver_initialized = true;
 
 	if (is_main_instance) {
 		// Only the singleton instance with a display should print this information.
@@ -9015,6 +9022,7 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 	// Find the best method available for VRS on the current hardware.
 	_vrs_detect_method();
 
+	lifecycle_state.store(LifecycleState::ACTIVE, std::memory_order_release);
 	return OK;
 }
 
@@ -9279,7 +9287,25 @@ uint64_t RenderingDevice::limit_get(Limit p_limit) const {
 }
 
 void RenderingDevice::finalize() {
+	LifecycleState state = lifecycle_state.load(std::memory_order_acquire);
+	if (state == LifecycleState::FINALIZED) {
+		return;
+	}
 	ERR_RENDER_THREAD_GUARD();
+	ERR_FAIL_COND(state == LifecycleState::FINALIZING);
+	lifecycle_state.store(LifecycleState::FINALIZING, std::memory_order_release);
+
+	// Initialization can fail before the driver has created any GPU objects.
+	if (driver == nullptr) {
+		lifecycle_state.store(LifecycleState::FINALIZED, std::memory_order_release);
+		return;
+	}
+	if (!driver_initialized) {
+		context->driver_free(driver);
+		driver = nullptr;
+		lifecycle_state.store(LifecycleState::FINALIZED, std::memory_order_release);
+		return;
+	}
 
 	if (!frames.is_empty()) {
 		// Wait for all frames to have finished rendering.
@@ -9436,6 +9462,9 @@ void RenderingDevice::finalize() {
 		context->driver_free(driver);
 		driver = nullptr;
 	}
+
+	// Complete the transition even when diagnostic leak checks below report errors.
+	lifecycle_state.store(LifecycleState::FINALIZED, std::memory_order_release);
 
 	// All these should be clear at this point.
 	ERR_FAIL_COND(dependency_map.size());
@@ -10296,7 +10325,10 @@ void RenderingDevice::make_current() {
 }
 
 RenderingDevice::~RenderingDevice() {
-	finalize();
+	if (!is_finalized()) {
+		// Early initialization failure is still finalized on the creating thread.
+		finalize();
+	}
 
 	if (singleton == this) {
 		singleton = nullptr;

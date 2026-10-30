@@ -276,6 +276,47 @@ void RenderingServerDefault::_finish() {
 	memdelete(RSG::camera_attributes);
 }
 
+void RenderingServerDefault::_finalize_main_rendering_device() {
+#ifdef RD_ENABLED
+	RenderingDevice *rd = RenderingDevice::get_singleton();
+	if (rd != nullptr && rd->is_main_rendering_device() && !rd->is_finalized()) {
+		rd->finalize();
+	}
+#endif
+}
+
+void RenderingServerDefault::_execute_sync_request(SyncRenderRequest *p_request) {
+	p_request->callable.call();
+	p_request->completed.post();
+}
+
+Error RenderingServerDefault::call_on_render_thread_sync(const Callable &p_callable) {
+	if (!p_callable.is_valid()) {
+		return ERR_INVALID_PARAMETER;
+	}
+	SyncRenderRequest *request = nullptr;
+	{
+		MutexLock lock(command_admission_mutex);
+		if (command_admission != CommandAdmissionState::RUNNING) {
+			return ERR_UNAVAILABLE;
+		}
+		if (Thread::get_caller_id() == server_thread) {
+			// Preserve FIFO ordering of commands already submitted from other threads.
+			lock.temp_unlock();
+			command_queue.flush_if_pending();
+			p_callable.call();
+			return OK;
+		}
+		request = memnew(SyncRenderRequest);
+		request->callable = p_callable;
+		// Queue admission and shutdown use one mutex; accepted requests precede teardown.
+		command_queue.push(this, &RenderingServerDefault::_execute_sync_request, request);
+	}
+	request->completed.wait();
+	memdelete(request);
+	return OK;
+}
+
 void RenderingServerDefault::init() {
 	if (create_thread) {
 		print_verbose("RenderingServerWrapMT: Starting render thread");
@@ -289,11 +330,23 @@ void RenderingServerDefault::init() {
 		server_thread = Thread::MAIN_ID;
 		_init();
 	}
+	{
+		MutexLock lock(command_admission_mutex);
+		command_admission = CommandAdmissionState::RUNNING;
+	}
 }
 
 void RenderingServerDefault::finish() {
+	{
+		MutexLock lock(command_admission_mutex);
+		if (command_admission != CommandAdmissionState::RUNNING) {
+			return;
+		}
+		command_admission = CommandAdmissionState::DRAINING;
+	}
 	if (create_thread) {
 		command_queue.push(this, &RenderingServerDefault::_finish);
+		command_queue.push(this, &RenderingServerDefault::_finalize_main_rendering_device);
 		command_queue.push(this, &RenderingServerDefault::_thread_exit);
 		if (server_task_id != WorkerThreadPool::INVALID_TASK_ID) {
 			WorkerThreadPool::get_singleton()->wait_for_task_completion(server_task_id);
@@ -302,6 +355,11 @@ void RenderingServerDefault::finish() {
 		server_thread = Thread::MAIN_ID;
 	} else {
 		_finish();
+		_finalize_main_rendering_device();
+	}
+	{
+		MutexLock lock(command_admission_mutex);
+		command_admission = CommandAdmissionState::STOPPED;
 	}
 }
 
