@@ -443,6 +443,30 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			result.push_back(int64_t(records[i].generation));
 		}
 		EngineDebugger::get_singleton()->send_message(gpu_records ? "servers:memprof_gpu_records" : "servers:memprof_records", result);
+	} else if (p_cmd == "memprof_events") {
+		// Bounded event history; the capture ID prevents cross-session mixing.
+		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
+			return ERR_INVALID_PARAMETER;
+		}
+		const int64_t first = p_data[0];
+		const int64_t capture = p_data[1];
+		const GodotMemoryTracking::Summary snap = GodotMemoryTracking::summary();
+		if (first < 1 || capture != int64_t(snap.capture_id)) {
+			return ERR_INVALID_PARAMETER;
+		}
+		GodotMemoryTracking::Event ev[32];
+		const size_t count = GodotMemoryTracking::events(uint64_t(first), ev, 32);
+		Array result = { int64_t(snap.capture_id), first, int64_t(count) };
+		for (size_t i = 0; i < count; ++i) {
+			result.push_back(int64_t(ev[i].sequence));
+			result.push_back(int64_t(ev[i].allocation_id));
+			result.push_back(int64_t(ev[i].address));
+			result.push_back(int64_t(ev[i].bytes));
+			result.push_back(int64_t(ev[i].category));
+			result.push_back(int64_t(ev[i].kind));
+			result.push_back(ev[i].gpu);
+		}
+		EngineDebugger::get_singleton()->send_message("servers:memprof_events", result);
 	} else if (p_cmd == "draw") { // Forced redraw.
 		// For camera override to stay live when the game is paused from the editor.
 		double delta = 0.0;
