@@ -176,6 +176,9 @@ private:
 	Button *vmem_trace_pin = nullptr;
 	Button *vmem_trace_compare = nullptr;
 	Tree *vmem_trace_diff_tree = nullptr;
+	Tree *vmem_callstack_tree = nullptr;
+	uint32_t vmem_last_stack = 0;
+	bool vmem_trace_imported = false;
 	int64_t vmem_trace_requested_capture = 0;
 	int64_t vmem_capture_id = 0;
 	int64_t vmem_alloc_next_offset = 0;
@@ -261,6 +264,7 @@ private:
 	void _msg_servers_memprof_events(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_trace_chunk(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_trace_error(uint64_t p_thread_id, const Array &p_data);
+	void _msg_servers_memprof_stack(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_drawn(uint64_t p_thread_id, const Array &p_data);
 	void _msg_stack_dump(uint64_t p_thread_id, const Array &p_data);
 	void _msg_stack_frame_vars(uint64_t p_thread_id, const Array &p_data);
@@ -305,6 +309,7 @@ private:
 	void _video_mem_trace_import();
 	void _video_mem_trace_pin_baseline();
 	void _video_mem_trace_compare();
+	void _video_mem_stack_selected(Tree *p_source);
 	void _video_mem_export();
 
 	void _resources_reimported(const PackedStringArray &p_resources);
