@@ -90,9 +90,13 @@ size_t slot_index(uintptr_t p_ptr) {
 }
 
 void write_event(State *p_state, RecordKind p_kind, const Slot &p_record, bool p_gpu = false) {
-	const uint64_t seq = p_state->sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+	// Publish sequence and payload under the same lock. A producer that obtains
+	// its sequence before taking the lock could otherwise overwrite a newer
+	// event after another producer has already committed it.
 	std::lock_guard<std::mutex> guard(p_state->event_mutex);
+	const uint64_t seq = p_state->sequence.load(std::memory_order_relaxed) + 1;
 	p_state->event_ring[(seq - 1) % EVENT_CAPACITY] = { seq, p_record.allocation_id, p_record.address, p_record.bytes, p_record.category, p_kind, p_gpu };
+	p_state->sequence.store(seq, std::memory_order_release);
 	if (seq > EVENT_CAPACITY) {
 		p_state->overwritten_events.fetch_add(1, std::memory_order_relaxed);
 	}
