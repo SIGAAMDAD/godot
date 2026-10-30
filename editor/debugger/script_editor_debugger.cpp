@@ -69,8 +69,8 @@
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
 #include "scene/gui/margin_container.h"
-#include "scene/gui/separator.h"
 #include "scene/gui/scroll_container.h"
+#include "scene/gui/separator.h"
 #include "scene/gui/split_container.h"
 #include "scene/gui/tab_container.h"
 #include "scene/gui/tree.h"
@@ -330,10 +330,10 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				vmem_capture_status->set_text(TTR("Cannot open trace or file exceeds the 32 MiB limit."));
 				return;
 			}
-			PackedByteArray data;
-			data.resize(int(file->get_length()));
-			if (file->get_buffer(data.ptrw(), data.size()) != uint64_t(data.size()) ||
-					!GodotMemoryTracking::read_trace(data.ptr(), data.size(), GodotMemoryTracking::TraceVisitor())) {
+			PackedByteArray trace_bytes;
+			trace_bytes.resize(int(file->get_length()));
+			if (file->get_buffer(trace_bytes.ptrw(), trace_bytes.size()) != uint64_t(trace_bytes.size()) ||
+					!GodotMemoryTracking::read_trace(trace_bytes.ptr(), trace_bytes.size(), GodotMemoryTracking::TraceVisitor())) {
 				vmem_capture_status->set_text(TTR("Trace rejected: invalid version, bounds, CRC or footer."));
 				return;
 			}
@@ -369,7 +369,7 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				rows->summary_seen = true;
 				return true;
 			};
-			if (!GodotMemoryTracking::read_trace(data.ptr(), data.size(), visitor) || !imported.summary_seen) {
+			if (!GodotMemoryTracking::read_trace(trace_bytes.ptr(), trace_bytes.size(), visitor) || !imported.summary_seen) {
 				vmem_capture_status->set_text(TTR("Trace rejected: invalid data records."));
 				return;
 			}
@@ -398,7 +398,7 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 			vmem_gpu_alloc_tree->clear();
 			vmem_logical_alloc_tree->clear();
 			vmem_event_tree->clear();
-			vmem_import_blob = data;
+			vmem_import_blob = trace_bytes;
 			vmem_import_cpu = imported.cpu;
 			vmem_import_gpu = imported.gpu;
 			vmem_import_logical = imported.logical;
@@ -529,18 +529,20 @@ void ScriptEditorDebugger::_video_mem_import_records_page(int p_domain) {
 	if (!vmem_trace_imported) {
 		return;
 	}
-	Tree *tree = p_domain == 0 ? vmem_alloc_tree : p_domain == 1 ? vmem_gpu_alloc_tree : vmem_logical_alloc_tree;
-	Button *more = p_domain == 0 ? vmem_alloc_more : p_domain == 1 ? vmem_gpu_alloc_more : vmem_logical_alloc_more;
-	Vector<GodotMemoryTracking::Record> *records = p_domain == 0 ? &vmem_import_cpu :
-			p_domain == 1 ? &vmem_import_gpu : &vmem_import_logical;
-	int *offset = p_domain == 0 ? &vmem_import_cpu_offset :
-			p_domain == 1 ? &vmem_import_gpu_offset : &vmem_import_logical_offset;
+	Tree *tree = p_domain == 0 ? vmem_alloc_tree : p_domain == 1 ? vmem_gpu_alloc_tree
+																 : vmem_logical_alloc_tree;
+	Button *more = p_domain == 0 ? vmem_alloc_more : p_domain == 1 ? vmem_gpu_alloc_more
+																   : vmem_logical_alloc_more;
+	Vector<GodotMemoryTracking::Record> *records = p_domain == 0 ? &vmem_import_cpu : p_domain == 1 ? &vmem_import_gpu
+																									: &vmem_import_logical;
+	int *offset = p_domain == 0 ? &vmem_import_cpu_offset : p_domain == 1 ? &vmem_import_gpu_offset
+																		  : &vmem_import_logical_offset;
 	TreeItem *root = tree->get_root();
 	if (!root) {
 		root = tree->create_item();
 	}
-	const int next = MIN(records->size(), *offset + 256);
-	for (int i = *offset; i < next; ++i) {
+	const int next_offset = MIN(records->size(), *offset + 256);
+	for (int i = *offset; i < next_offset; ++i) {
 		const GodotMemoryTracking::Record &record = (*records)[i];
 		TreeItem *row = tree->create_item(root);
 		row->set_text(0, itos(int64_t(record.allocation_id)));
@@ -551,8 +553,8 @@ void ScriptEditorDebugger::_video_mem_import_records_page(int p_domain) {
 		row->set_text(5, itos(record.stack_id));
 		row->set_metadata(0, int64_t(record.stack_id));
 	}
-	*offset = next;
-	more->set_disabled(next >= records->size());
+	*offset = next_offset;
+	more->set_disabled(next_offset >= records->size());
 	_video_mem_filter_changed(vmem_capture_filter->get_text());
 }
 
@@ -564,8 +566,8 @@ void ScriptEditorDebugger::_video_mem_import_events_page() {
 	if (!root) {
 		root = vmem_event_tree->create_item();
 	}
-	const int next = MIN(vmem_import_events.size(), vmem_import_event_offset + 256);
-	for (int i = vmem_import_event_offset; i < next; ++i) {
+	const int next_offset = MIN(vmem_import_events.size(), vmem_import_event_offset + 256);
+	for (int i = vmem_import_event_offset; i < next_offset; ++i) {
 		const GodotMemoryTracking::Event &event = vmem_import_events[i];
 		TreeItem *row = vmem_event_tree->create_item(root);
 		row->set_text(0, itos(int64_t(event.sequence)));
@@ -573,8 +575,8 @@ void ScriptEditorDebugger::_video_mem_import_events_page() {
 		row->set_text(2, TTR("Omitted from trace"));
 		row->set_text(3, String::humanize_size(event.bytes));
 		row->set_text(4, itos(event.category));
-		row->set_text(5, event.kind == GodotMemoryTracking::RecordKind::ALLOC ? TTR("Alloc") :
-				event.kind == GodotMemoryTracking::RecordKind::FREE ? TTR("Free") : TTR("Realloc"));
+		row->set_text(5, event.kind == GodotMemoryTracking::RecordKind::ALLOC ? TTR("Alloc") : event.kind == GodotMemoryTracking::RecordKind::FREE ? TTR("Free")
+																																				   : TTR("Realloc"));
 		row->set_text(6, event.gpu ? TTR("GPU") : TTR("CPU"));
 		row->set_text(7, itos(event.stack_id));
 		row->set_text(8, itos(event.timestamp_us));
@@ -582,8 +584,8 @@ void ScriptEditorDebugger::_video_mem_import_events_page() {
 		row->set_text(10, itos(event.frame_id));
 		row->set_metadata(0, int64_t(event.stack_id));
 	}
-	vmem_import_event_offset = next;
-	vmem_event_more->set_disabled(next >= vmem_import_events.size());
+	vmem_import_event_offset = next_offset;
+	vmem_event_more->set_disabled(next_offset >= vmem_import_events.size());
 	_video_mem_filter_changed(vmem_capture_filter->get_text());
 }
 
@@ -682,7 +684,8 @@ void ScriptEditorDebugger::_video_mem_trace_compare() {
 		const int64_t previous_count = vmem_trace_baseline_count.has(p_key) ? vmem_trace_baseline_count[p_key] : 0;
 		const int64_t current_count = vmem_trace_current_count.has(p_key) ? vmem_trace_current_count[p_key] : 0;
 		TreeItem *item = vmem_trace_diff_tree->create_item(root);
-		item->set_text(0, (p_key >> 32) == 2 ? TTR("GPU logical") : (p_key >> 32) == 1 ? TTR("GPU backing") : TTR("Native CPU"));
+		item->set_text(0, (p_key >> 32) == 2 ? TTR("GPU logical") : (p_key >> 32) == 1 ? TTR("GPU backing")
+																					   : TTR("Native CPU"));
 		item->set_text(1, itos(p_key & UINT32_MAX));
 		item->set_text(2, itos(previous));
 		item->set_text(3, itos(current));
@@ -718,16 +721,16 @@ void ScriptEditorDebugger::_video_mem_filter_changed(const String &p_filter) {
 			continue;
 		}
 		for (TreeItem *row = tree->get_root()->get_first_child(); row; row = row->get_next()) {
-			bool visible = needle.is_empty();
-			if (!visible) {
+			bool matches_filter = needle.is_empty();
+			if (!matches_filter) {
 				for (int column = 0; column < tree->get_columns(); ++column) {
 					if (row->get_text(column).to_lower().contains(needle)) {
-						visible = true;
+						matches_filter = true;
 						break;
 					}
 				}
 			}
-			row->set_visible(visible);
+			row->set_visible(matches_filter);
 		}
 	}
 }
@@ -1083,7 +1086,8 @@ void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, con
 		item->set_text(3, String::humanize_size(int64_t(p_data[index + 3])));
 		item->set_text(4, itos(int64_t(p_data[index + 4])));
 		const int kind = p_data[index + 5];
-		item->set_text(5, kind == 0 ? TTR("Alloc") : kind == 1 ? TTR("Free") : TTR("Realloc"));
+		item->set_text(5, kind == 0 ? TTR("Alloc") : kind == 1 ? TTR("Free")
+															   : TTR("Realloc"));
 		item->set_text(6, bool(p_data[index + 6]) ? TTR("GPU") : TTR("CPU"));
 		item->set_text(7, itos(int64_t(p_data[index + 7])));
 		item->set_text(8, itos(int64_t(p_data[index + 8])));

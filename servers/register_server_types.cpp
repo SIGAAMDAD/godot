@@ -65,7 +65,10 @@
 #ifdef RD_ENABLED
 #include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #ifdef FORWARD_RD_ENABLED
+#include "servers/rendering/renderer_rd/forward_clustered/terrain3d_forward_plus_bridge_abi.h"
+#if T3D_NATIVE_BRIDGE_ENABLED
 #include "servers/rendering/renderer_rd/forward_clustered/terrain3d_forward_plus_bridge.h"
+#endif
 #endif
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_scene_buffers_rd.h"
@@ -131,7 +134,7 @@
 #endif // XR_DISABLED
 
 ShaderTypes *shader_types = nullptr;
-#ifdef FORWARD_RD_ENABLED
+#if defined(FORWARD_RD_ENABLED) && defined(T3D_NATIVE_BRIDGE_ENABLED) && T3D_NATIVE_BRIDGE_ENABLED
 static Terrain3DForwardPlusBridge *terrain3d_native_bridge = nullptr;
 #endif
 
@@ -163,7 +166,7 @@ void register_server_types() {
 	OS::get_singleton()->benchmark_begin_measure("Servers", "Register Extensions");
 
 	shader_types = memnew(ShaderTypes);
-#ifdef FORWARD_RD_ENABLED
+#if defined(FORWARD_RD_ENABLED) && defined(T3D_NATIVE_BRIDGE_ENABLED) && T3D_NATIVE_BRIDGE_ENABLED
 	GDREGISTER_CLASS(Terrain3DForwardPlusBridge);
 	terrain3d_native_bridge = memnew(Terrain3DForwardPlusBridge);
 #endif
@@ -410,7 +413,7 @@ void unregister_server_types() {
 
 	ServersDebugger::deinitialize();
 	memdelete(shader_types);
-#ifdef FORWARD_RD_ENABLED
+#if defined(FORWARD_RD_ENABLED) && defined(T3D_NATIVE_BRIDGE_ENABLED) && T3D_NATIVE_BRIDGE_ENABLED
 	memdelete(terrain3d_native_bridge);
 	terrain3d_native_bridge = nullptr;
 #endif
@@ -430,7 +433,7 @@ void register_server_singletons() {
 	Engine::get_singleton()->add_singleton(Engine::Singleton("DisplayServer", DisplayServer::get_singleton(), "DisplayServer"));
 	Engine::get_singleton()->add_singleton(Engine::Singleton("NativeMenu", NativeMenu::get_singleton(), "NativeMenu"));
 	Engine::get_singleton()->add_singleton(Engine::Singleton("RenderingServer", RenderingServer::get_singleton(), "RenderingServer"));
-#ifdef FORWARD_RD_ENABLED
+#if defined(FORWARD_RD_ENABLED) && defined(T3D_NATIVE_BRIDGE_ENABLED) && T3D_NATIVE_BRIDGE_ENABLED
 	Engine::get_singleton()->add_singleton(Engine::Singleton("Terrain3DForwardPlusBridge", Terrain3DForwardPlusBridge::get_singleton(), "Terrain3DForwardPlusBridge"));
 #endif
 #ifndef NAVIGATION_2D_DISABLED

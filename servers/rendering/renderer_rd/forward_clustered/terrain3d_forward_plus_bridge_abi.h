@@ -1,11 +1,44 @@
 /**************************************************************************/
-/*  terrain3d_forward_plus_bridge_abi.h                                  */
+/*  terrain3d_forward_plus_bridge_abi.h                                   */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
 #pragma once
 
 #include <stddef.h>
 #include <stdint.h>
+
+// The native callback ABI transports function pointers through 64-bit integers.
+#if UINTPTR_MAX == UINT64_MAX
+#define T3D_NATIVE_BRIDGE_ENABLED 1
+#else
+#define T3D_NATIVE_BRIDGE_ENABLED 0
+#endif
 #include <type_traits>
 
 #if defined(_WIN32)
@@ -197,6 +230,7 @@ typedef t3dBridgeDeferredUpload t3dBridgeHotFrameInfo;
 typedef bool(T3D_BRIDGE_CALL *t3dHotSealFn)(void *, const t3dBridgeHotFrameInfo *) noexcept;
 static_assert(offsetof(t3dBridgeHotFrameInfo, render_frame) == 8);
 
+#if T3D_NATIVE_BRIDGE_ENABLED
 static_assert(sizeof(void *) == 8, "The Terrain3D Forward+ bridge requires 64-bit pointers.");
 static_assert(std::is_standard_layout_v<t3dBridgeFrame> && std::is_trivially_copyable_v<t3dBridgeFrame>);
 static_assert(std::is_standard_layout_v<t3dBridgeSceneResources> && std::is_trivially_copyable_v<t3dBridgeSceneResources>);
@@ -210,5 +244,6 @@ static_assert(offsetof(t3dBridgeSceneResources, radiance_texture) == 120, "ABI 1
 static_assert(offsetof(t3dBridgeSceneResources, previous_depth_texture) == 128, "ABI 12 previous-depth RID must remain append-only.");
 static_assert(alignof(t3dBridgePass) == 8 && sizeof(t3dBridgePass) == 48, "Unexpected ABI 12 pass layout.");
 static_assert(alignof(t3dBridgeShadow) == 8 && sizeof(t3dBridgeShadow) == 200, "Unexpected ABI 12 shadow layout.");
+#endif // T3D_NATIVE_BRIDGE_ENABLED
 
 #undef T3D_BRIDGE_CALL

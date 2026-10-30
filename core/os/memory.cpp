@@ -147,7 +147,7 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 		mem -= DATA_OFFSET;
 		uint64_t *s = (uint64_t *)(mem + SIZE_OFFSET);
 
-		const uint64_t old_bytes = *s;
+		[[maybe_unused]] const uint64_t old_bytes = *s;
 
 		if (p_bytes == 0) {
 			GodotMemoryTracking::record_free(p_memory);

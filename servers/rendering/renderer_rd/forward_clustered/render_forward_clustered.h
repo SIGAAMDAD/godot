@@ -31,16 +31,19 @@
 #pragma once
 
 #include "core/templates/paged_allocator.h"
+#include "drivers/xess/xess.h"
 #include "servers/rendering/multi_uma_buffer.h"
 #include "servers/rendering/renderer_rd/cluster_builder_rd.h"
-#include "servers/rendering/renderer_rd/effects/fsr2.h"
-#include "drivers/xess/xess.h"
 #include "servers/rendering/renderer_rd/effects/dlss.h"
+#include "servers/rendering/renderer_rd/effects/fsr2.h"
 #include "servers/rendering/renderer_rd/effects/motion_vectors_store.h"
 #include "servers/rendering/renderer_rd/effects/ss_effects.h"
 #include "servers/rendering/renderer_rd/effects/taa.h"
 #include "servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h"
+#include "servers/rendering/renderer_rd/forward_clustered/terrain3d_forward_plus_bridge_abi.h"
+#if T3D_NATIVE_BRIDGE_ENABLED
 #include "servers/rendering/renderer_rd/forward_clustered/terrain3d_forward_plus_bridge.h"
+#endif
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/best_fit_normal.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/integrate_dfg.glsl.gen.h"
@@ -470,7 +473,9 @@ private:
 			bool flip_cull;
 
 			uint32_t uniform_buffer_index;
+#if T3D_NATIVE_BRIDGE_ENABLED
 			t3dBridgeShadow terrain3d_bridge_shadow = {};
+#endif
 		};
 
 		LocalVector<ShadowPass> shadow_passes;
@@ -510,6 +515,7 @@ private:
 	void _render_list(RenderingDevice::DrawListID p_draw_list, RenderingDevice::FramebufferFormatID p_framebuffer_Format, RenderListParameters *p_params, uint32_t p_from_element, uint32_t p_to_element);
 	void _render_list_with_draw_list(RenderListParameters *p_params, RID p_framebuffer, BitField<RD::DrawFlags> p_draw_flags = RD::DRAW_DEFAULT_ALL, const Vector<Color> &p_clear_color_values = Vector<Color>(), float p_clear_depth_value = 0.0, uint32_t p_clear_stencil_value = 0, const Rect2 &p_region = Rect2(), t3dBridgePassKind p_terrain3d_pass_kind = T3D_BRIDGE_PASS_INVALID, t3dBridgeShadow *p_terrain3d_shadow = nullptr);
 
+#if T3D_NATIVE_BRIDGE_ENABLED
 	t3dBridgeFrame terrain3d_bridge_frame = {};
 	t3dBridgeSceneResources terrain3d_bridge_resources = {};
 	Terrain3DForwardPlusBridge::RenderThreadHandle terrain3d_bridge_callback_handle = 0;
@@ -523,6 +529,7 @@ private:
 	void _terrain3d_bridge_begin_frame(const RenderDataRD *p_render_data, const Size2i &p_screen_size, uint32_t p_sample_count, bool p_is_reflection_probe);
 	void _terrain3d_bridge_update_environment(const RenderDataRD *p_render_data);
 	void _terrain3d_bridge_update_resources(const RenderDataRD *p_render_data, RID p_radiance_texture, RID p_previous_depth_texture);
+#endif // T3D_NATIVE_BRIDGE_ENABLED
 
 	void _fill_instance_data(RenderListType p_render_list, int *p_render_info = nullptr, uint32_t p_offset = 0, int32_t p_max_elements = -1, bool p_update_buffer = true);
 	void _fill_render_list(RenderListType p_render_list, const RenderDataRD *p_render_data, PassMode p_pass_mode, bool p_using_sdfgi = false, bool p_using_opaque_gi = false, bool p_using_motion_pass = false, bool p_append = false);

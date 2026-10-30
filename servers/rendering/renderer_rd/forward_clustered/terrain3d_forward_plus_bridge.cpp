@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  terrain3d_forward_plus_bridge.cpp                                    */
+/*  terrain3d_forward_plus_bridge.cpp                                     */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,11 +30,12 @@
 
 #include "terrain3d_forward_plus_bridge.h"
 
-#include "core/os/memory.h"
 #include "core/object/callable_mp.h"
-#include "servers/rendering/rendering_server.h"
+#include "core/os/memory.h"
 #include "servers/rendering/rendering_device.h"
+#include "servers/rendering/rendering_server.h"
 
+#if T3D_NATIVE_BRIDGE_ENABLED
 Terrain3DForwardPlusBridge *Terrain3DForwardPlusBridge::singleton = nullptr;
 
 void Terrain3DForwardPlusBridge::_bind_methods() {
@@ -249,7 +250,8 @@ bool Terrain3DForwardPlusBridge::defer_native_buffer_update(RID p_buffer, int64_
 	ERR_FAIL_COND_V_MSG(!slot->inside_prepare || slot->prepare_count != 1, false,
 			"Reserve the Terrain3D HOT upload in the first PREPARE, before recording GPU consumers.");
 	ERR_FAIL_COND_V(p_fill_address == 0 || p_user_data_address == 0 || p_offset < 0 || p_size <= 0 ||
-			uint64_t(p_offset) > UINT32_MAX || uint64_t(p_size) > UINT32_MAX, false);
+					uint64_t(p_offset) > UINT32_MAX || uint64_t(p_size) > UINT32_MAX,
+			false);
 	const uint64_t render_frame = slot->prepare_render_frame;
 	ERR_FAIL_COND_V_MSG(slot->deferred_render_frame == render_frame || slot->deferred_pending.load(std::memory_order_acquire), false,
 			"Only one Terrain3D HOT upload is allowed per render frame.");
@@ -342,3 +344,5 @@ Terrain3DForwardPlusBridge::~Terrain3DForwardPlusBridge() {
 	retired_slots.clear();
 	singleton = nullptr;
 }
+
+#endif // T3D_NATIVE_BRIDGE_ENABLED

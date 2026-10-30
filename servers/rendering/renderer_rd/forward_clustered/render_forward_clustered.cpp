@@ -54,6 +54,7 @@ using namespace RendererSceneRenderImplementation;
 
 #define FADE_ALPHA_PASS_THRESHOLD 0.999
 
+#if T3D_NATIVE_BRIDGE_ENABLED
 static_assert(sizeof(RID) == sizeof(uint64_t), "The Terrain3D bridge requires 64-bit RID handles.");
 
 static _FORCE_INLINE_ void _terrain3d_store_transform(const Transform3D &p_transform, float *r_values) {
@@ -85,6 +86,7 @@ static _FORCE_INLINE_ uint64_t _terrain3d_bridge_rid(RID p_rid) {
 	memcpy(&result, &p_rid, sizeof(result));
 	return result;
 }
+#endif // T3D_NATIVE_BRIDGE_ENABLED
 
 void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_specular() {
 	ERR_FAIL_NULL(render_buffers);
@@ -791,6 +793,7 @@ void RenderForwardClustered::_render_list(RenderingDevice::DrawListID p_draw_lis
 	}
 }
 
+#if T3D_NATIVE_BRIDGE_ENABLED
 void RenderForwardClustered::_terrain3d_bridge_begin_frame(const RenderDataRD *p_render_data, const Size2i &p_screen_size, uint32_t p_sample_count, bool p_is_reflection_probe) {
 	ERR_FAIL_NULL(p_render_data);
 	ERR_FAIL_NULL(p_render_data->scene_data);
@@ -824,7 +827,7 @@ void RenderForwardClustered::_terrain3d_bridge_begin_frame(const RenderDataRD *p
 	frame.abi_version = T3D_FORWARD_BRIDGE_ABI;
 	frame.struct_size = sizeof(t3dBridgeFrame);
 	frame.generation = terrain3d_bridge_frame_generation;
-	frame.flags = scene_data->calculate_motion_vectors ? T3D_BRIDGE_FRAME_MOTION_VECTORS : 0;
+	frame.flags = scene_data->calculate_motion_vectors ? uint32_t(T3D_BRIDGE_FRAME_MOTION_VECTORS) : 0u;
 	frame.view_count = MIN(scene_data->view_count, T3D_FORWARD_MAX_VIEWS);
 	frame.render_frame = RSG::rasterizer->get_frame_number();
 	frame.scene_pass = get_scene_pass();
@@ -892,10 +895,10 @@ void RenderForwardClustered::_terrain3d_bridge_update_environment(const RenderDa
 	t3dBridgeFrame updated_frame = terrain3d_bridge_frame;
 	updated_frame.abi10_reserved_tail = 0;
 	updated_frame.environment_flags =
-			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_AMBIENT_LIGHT) ? T3D_BRIDGE_ENV_USE_AMBIENT_LIGHT : 0) |
-			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_AMBIENT_CUBEMAP) ? T3D_BRIDGE_ENV_USE_AMBIENT_CUBEMAP : 0) |
-			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_REFLECTION_CUBEMAP) ? T3D_BRIDGE_ENV_USE_REFLECTION_CUBEMAP : 0) |
-			(is_using_radiance_octmap_array() ? T3D_BRIDGE_ENV_RADIANCE_OCTMAP_ARRAY : 0);
+			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_AMBIENT_LIGHT) ? uint32_t(T3D_BRIDGE_ENV_USE_AMBIENT_LIGHT) : 0u) |
+			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_AMBIENT_CUBEMAP) ? uint32_t(T3D_BRIDGE_ENV_USE_AMBIENT_CUBEMAP) : 0u) |
+			((environment.flags & RenderSceneDataRD::ENVIRONMENT_LIGHTING_USE_REFLECTION_CUBEMAP) ? uint32_t(T3D_BRIDGE_ENV_USE_REFLECTION_CUBEMAP) : 0u) |
+			(is_using_radiance_octmap_array() ? uint32_t(T3D_BRIDGE_ENV_RADIANCE_OCTMAP_ARRAY) : 0u);
 	updated_frame.environment_reserved0 = 0;
 	memcpy(updated_frame.ambient_light_color_energy, environment.ambient_light_color_energy, sizeof(updated_frame.ambient_light_color_energy));
 	updated_frame.ambient_color_sky_mix = environment.ambient_color_sky_mix;
@@ -961,10 +964,13 @@ void RenderForwardClustered::_terrain3d_bridge_update_resources(const RenderData
 	terrain3d_bridge_resources_ready = true;
 }
 
+#endif // T3D_NATIVE_BRIDGE_ENABLED
+
 void RenderForwardClustered::_render_list_with_draw_list(RenderListParameters *p_params, RID p_framebuffer, BitField<RD::DrawFlags> p_draw_flags, const Vector<Color> &p_clear_color_values, float p_clear_depth_value, uint32_t p_clear_stencil_value, const Rect2 &p_region, t3dBridgePassKind p_terrain3d_pass_kind, t3dBridgeShadow *p_terrain3d_shadow) {
 	RD::FramebufferFormatID fb_format = RD::get_singleton()->framebuffer_get_format(p_framebuffer);
 	p_params->framebuffer_format = fb_format;
 
+#if T3D_NATIVE_BRIDGE_ENABLED
 	uint64_t terrain3d_token = 0;
 	Terrain3DForwardPlusBridge *terrain3d_bridge = Terrain3DForwardPlusBridge::get_singleton();
 	const Terrain3DForwardPlusBridge::RenderThreadHandle callback_handle = terrain3d_bridge_callback_handle;
@@ -975,7 +981,7 @@ void RenderForwardClustered::_render_list_with_draw_list(RenderListParameters *p
 		}
 		if (p_terrain3d_shadow != nullptr) {
 			p_terrain3d_shadow->native_pass_mode = p_params->pass_mode;
-			p_terrain3d_shadow->flags = p_params->reverse_cull ? T3D_BRIDGE_PASS_REVERSE_CULL : 0;
+			p_terrain3d_shadow->flags = p_params->reverse_cull ? uint32_t(T3D_BRIDGE_PASS_REVERSE_CULL) : 0u;
 			p_terrain3d_shadow->sample_count = 1;
 			p_terrain3d_shadow->framebuffer_format = int64_t(fb_format);
 			p_terrain3d_shadow->serial = terrain3d_bridge_pass_serial;
@@ -990,8 +996,8 @@ void RenderForwardClustered::_render_list_with_draw_list(RenderListParameters *p
 			pass.pass_kind = p_terrain3d_pass_kind;
 			pass.native_pass_mode = p_params->pass_mode;
 			pass.color_pass_flags = p_params->color_pass_flags;
-			pass.flags = (terrain3d_bridge_depth_prepass_active ? T3D_BRIDGE_PASS_DEPTH_PREPASS_ACTIVE : 0) |
-					(p_params->reverse_cull ? T3D_BRIDGE_PASS_REVERSE_CULL : 0);
+			pass.flags = (terrain3d_bridge_depth_prepass_active ? uint32_t(T3D_BRIDGE_PASS_DEPTH_PREPASS_ACTIVE) : 0u) |
+					(p_params->reverse_cull ? uint32_t(T3D_BRIDGE_PASS_REVERSE_CULL) : 0u);
 			pass.framebuffer_format = int64_t(fb_format);
 			pass.serial = terrain3d_bridge_pass_serial;
 			pass.native_framebuffer = _terrain3d_bridge_rid(p_framebuffer);
@@ -1009,10 +1015,17 @@ void RenderForwardClustered::_render_list_with_draw_list(RenderListParameters *p
 		}
 	}
 
+#else
+	(void)p_terrain3d_pass_kind;
+	(void)p_terrain3d_shadow;
+#endif
+
 	RD::DrawListID draw_list = RD::get_singleton()->draw_list_begin(p_framebuffer, p_draw_flags, p_clear_color_values, p_clear_depth_value, p_clear_stencil_value, p_region);
+#if T3D_NATIVE_BRIDGE_ENABLED
 	if (terrain3d_token != 0) {
 		terrain3d_bridge->submit(callback_handle, terrain3d_token, int64_t(draw_list));
 	}
+#endif
 	_render_list(draw_list, fb_format, p_params, 0, p_params->element_count);
 	RD::get_singleton()->draw_list_end();
 }
@@ -2523,6 +2536,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	RSE::ViewportMSAA msaa = rb->get_msaa_3d();
 	bool use_msaa = msaa != RSE::VIEWPORT_MSAA_DISABLED;
+#if T3D_NATIVE_BRIDGE_ENABLED
 	_terrain3d_bridge_begin_frame(p_render_data, screen_size, texture_multisamples[msaa], is_reflection_probe);
 	const bool terrain3d_depth_history_capture = terrain3d_bridge_callback_handle != 0 && rb_data.is_valid() && !is_reflection_probe && rb->get_view_count() == 1 && rb->has_depth_texture();
 	RID terrain3d_previous_depth_texture;
@@ -2531,6 +2545,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	} else if (rb_data.is_valid() && !terrain3d_depth_history_capture) {
 		rb_data->set_terrain3d_previous_depth_valid(false);
 	}
+#else
+	const bool terrain3d_depth_history_capture = false;
+#endif
 
 	bool ce_pre_opaque_resolved_color = use_msaa && _compositor_effects_has_flag(p_render_data, RSE::COMPOSITOR_EFFECT_FLAG_ACCESS_RESOLVED_COLOR, RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_PRE_OPAQUE);
 	bool ce_post_opaque_resolved_color = use_msaa && _compositor_effects_has_flag(p_render_data, RSE::COMPOSITOR_EFFECT_FLAG_ACCESS_RESOLVED_COLOR, RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_OPAQUE);
@@ -2544,7 +2561,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	bool debug_sdfgi_probes = get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_SDFGI_PROBES;
 	bool force_depth_pre_pass = scene_state.used_opaque_stencil || using_ssao || using_ssr || using_sscs || using_ssil;
 	bool depth_pre_pass = (force_depth_pre_pass || scene_shader.depth_prepass_enabled) && depth_framebuffer.is_valid();
+#if T3D_NATIVE_BRIDGE_ENABLED
 	terrain3d_bridge_depth_prepass_active = depth_pre_pass;
+#endif
 
 	SceneShaderForwardClustered::ShaderSpecialization base_specialization = scene_shader.default_specialization;
 	base_specialization.use_depth_fog = p_render_data->environment.is_valid() && environment_get_fog_mode(p_render_data->environment) == RSE::EnvironmentFogMode::ENV_FOG_MODE_DEPTH;
@@ -2617,11 +2636,14 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			voxel_gi_views[v] = rb_data->get_voxelgi(v);
 		}
 	}
+#if T3D_NATIVE_BRIDGE_ENABLED
 	_terrain3d_bridge_update_resources(p_render_data, radiance_texture, terrain3d_previous_depth_texture);
+#endif
 	_pre_opaque_render(p_render_data, using_ssao, using_ssil, using_ssr, using_sscs, using_sdfgi || using_voxelgi, normal_roughness_views, voxel_gi_views);
 
+#if T3D_NATIVE_BRIDGE_ENABLED
 	const uint32_t terrain3d_frame_flags = (terrain3d_bridge_frame.flags & ~T3D_BRIDGE_FRAME_DIRECTIONAL_SOFT_SHADOWS) |
-			(p_render_data->directional_light_soft_shadows ? T3D_BRIDGE_FRAME_DIRECTIONAL_SOFT_SHADOWS : 0);
+			(p_render_data->directional_light_soft_shadows ? uint32_t(T3D_BRIDGE_FRAME_DIRECTIONAL_SOFT_SHADOWS) : 0u);
 	if (terrain3d_bridge_callback_handle != 0 && (terrain3d_bridge_frame.directional_light_count != p_render_data->directional_light_count || terrain3d_bridge_frame.flags != terrain3d_frame_flags)) {
 		terrain3d_bridge_frame.directional_light_count = p_render_data->directional_light_count;
 		terrain3d_bridge_frame.flags = terrain3d_frame_flags;
@@ -2632,7 +2654,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		terrain3d_bridge_frame.generation = terrain3d_bridge_frame_generation;
 		terrain3d_bridge_frame_pending = true;
 	}
+#endif
+#if T3D_NATIVE_BRIDGE_ENABLED
 	_terrain3d_bridge_update_resources(p_render_data, radiance_texture, terrain3d_previous_depth_texture);
+#endif
 
 	if (current_cluster_builder) {
 		base_specialization.cluster_has_area_light = current_cluster_builder->get_cluster_count_by_type(ClusterBuilderRD::ELEMENT_TYPE_AREA_LIGHT) != 0;
@@ -2649,7 +2674,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	_update_render_base_uniform_set();
 
 	uint32_t opaque_pass_uniform_buffer_index = _setup_environment(p_render_data, is_reflection_probe, screen_size, screen_size, p_default_bg_color, true, using_motion_pass);
+#if T3D_NATIVE_BRIDGE_ENABLED
 	_terrain3d_bridge_update_environment(p_render_data);
+#endif
 
 	RID rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, p_render_data, is_multiview, radiance_texture, samplers, opaque_pass_uniform_buffer_index, true);
 
@@ -2869,7 +2896,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	RD::get_singleton()->draw_command_begin_label("Render 3D Transparent Pass");
 
 	uint32_t transparent_pass_uniform_buffer_index = _setup_environment(p_render_data, is_reflection_probe, screen_size, screen_size, p_default_bg_color, false);
+#if T3D_NATIVE_BRIDGE_ENABLED
 	_terrain3d_bridge_update_environment(p_render_data);
+#endif
 
 	rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_ALPHA, p_render_data, is_multiview, radiance_texture, samplers, transparent_pass_uniform_buffer_index, true);
 
@@ -3451,18 +3480,20 @@ void RenderForwardClustered::_render_shadow_append(RID p_framebuffer, const Page
 		shadow_pass.rect = p_rect;
 
 		shadow_pass.uniform_buffer_index = uniform_buffer_index;
+#if T3D_NATIVE_BRIDGE_ENABLED
 		if (terrain3d_bridge_callback_handle != 0) {
 			t3dBridgeShadow &bridge_shadow = shadow_pass.terrain3d_bridge_shadow;
 			bridge_shadow.abi_version = T3D_FORWARD_BRIDGE_ABI;
 			bridge_shadow.struct_size = sizeof(t3dBridgeShadow);
 			bridge_shadow.shadow_caster_mask = p_caster_mask;
 			bridge_shadow.shadow_light_cull_mask = p_light_cull_mask;
-			bridge_shadow.flags = p_reverse_cull_face ? T3D_BRIDGE_PASS_REVERSE_CULL : 0;
+			bridge_shadow.flags = p_reverse_cull_face ? uint32_t(T3D_BRIDGE_PASS_REVERSE_CULL) : 0u;
 			Projection correction;
 			correction.set_depth_correction(!p_flip_y);
 			_terrain3d_store_projection((correction * p_projection) * Projection(p_transform.affine_inverse()), bridge_shadow.view_projection);
 			_terrain3d_store_transform(p_transform, bridge_shadow.camera_transform);
 		}
+#endif
 
 		scene_state.shadow_passes.push_back(shadow_pass);
 	}
@@ -3489,7 +3520,11 @@ void RenderForwardClustered::_render_shadow_end() {
 
 	for (SceneState::ShadowPass &shadow_pass : scene_state.shadow_passes) {
 		RenderListParameters render_list_parameters(render_list[RENDER_LIST_SECONDARY].elements.ptr() + shadow_pass.element_from, render_list[RENDER_LIST_SECONDARY].element_info.ptr() + shadow_pass.element_from, shadow_pass.element_count, shadow_pass.flip_cull, shadow_pass.pass_mode, 0, true, false, shadow_pass.rp_uniform_set, false, Vector2(), shadow_pass.lod_distance_multiplier, shadow_pass.screen_mesh_lod_threshold, 1, shadow_pass.element_from);
+#if T3D_NATIVE_BRIDGE_ENABLED
 		_render_list_with_draw_list(&render_list_parameters, shadow_pass.framebuffer, shadow_pass.clear_depth ? RD::DRAW_CLEAR_DEPTH : RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0, shadow_pass.rect, T3D_BRIDGE_PASS_SHADOW, &shadow_pass.terrain3d_bridge_shadow);
+#else
+		_render_list_with_draw_list(&render_list_parameters, shadow_pass.framebuffer, shadow_pass.clear_depth ? RD::DRAW_CLEAR_DEPTH : RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0, shadow_pass.rect);
+#endif
 	}
 
 	RD::get_singleton()->draw_command_end_label();
