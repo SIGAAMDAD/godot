@@ -360,6 +360,20 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				return;
 			}
 			vmem_capture_id = int64_t(imported.summary.capture_id);
+			vmem_trace_current_bytes.clear();
+			vmem_trace_current_count.clear();
+			vmem_trace_current_id = vmem_capture_id;
+			vmem_trace_current_valid = true;
+			for (const GodotMemoryTracking::Record &record : imported.cpu) {
+				const uint64_t key = uint64_t(record.category);
+				vmem_trace_current_bytes[key] += int64_t(record.bytes);
+				vmem_trace_current_count[key] += 1;
+			}
+			for (const GodotMemoryTracking::Record &record : imported.gpu) {
+				const uint64_t key = (uint64_t(1) << 32) | uint64_t(record.category);
+				vmem_trace_current_bytes[key] += int64_t(record.bytes);
+				vmem_trace_current_count[key] += 1;
+			}
 			vmem_alloc_tree->clear();
 			vmem_gpu_alloc_tree->clear();
 			vmem_event_tree->clear();
@@ -482,6 +496,9 @@ void ScriptEditorDebugger::_video_mem_capture_start() {
 	vmem_trace_requested_capture = 0;
 	vmem_trace_payload.clear();
 	vmem_trace_export_path.clear();
+	vmem_trace_current_valid = false;
+	vmem_trace_current_bytes.clear();
+	vmem_trace_current_count.clear();
 	vmem_alloc_next_offset = 0;
 	vmem_gpu_alloc_next_offset = 0;
 	vmem_event_next_sequence = 1;
@@ -521,6 +538,50 @@ void ScriptEditorDebugger::_video_mem_trace_export() {
 	file_dialog->add_filter("*.gdmemtrace", "Godot Memory Trace");
 	file_dialog_purpose = SAVE_MEMORY_CAPTURE_TRACE;
 	file_dialog->popup_file_dialog();
+}
+
+void ScriptEditorDebugger::_video_mem_trace_pin_baseline() {
+	if (!vmem_trace_current_valid) {
+		vmem_capture_status->set_text(TTR("Import a native memory trace before pinning a baseline."));
+		return;
+	}
+	vmem_trace_baseline_bytes = vmem_trace_current_bytes;
+	vmem_trace_baseline_count = vmem_trace_current_count;
+	vmem_trace_baseline_id = vmem_trace_current_id;
+	vmem_trace_baseline_valid = true;
+	vmem_capture_status->set_text(vformat("Pinned imported baseline capture %d", vmem_trace_baseline_id));
+}
+
+void ScriptEditorDebugger::_video_mem_trace_compare() {
+	if (!vmem_trace_baseline_valid || !vmem_trace_current_valid) {
+		vmem_capture_status->set_text(TTR("Import and pin a baseline, then import a second trace."));
+		return;
+	}
+	vmem_trace_diff_tree->clear();
+	TreeItem *root = vmem_trace_diff_tree->create_item();
+	auto add_row = [&](uint64_t p_key) {
+		const int64_t previous = vmem_trace_baseline_bytes.has(p_key) ? vmem_trace_baseline_bytes[p_key] : 0;
+		const int64_t current = vmem_trace_current_bytes.has(p_key) ? vmem_trace_current_bytes[p_key] : 0;
+		const int64_t previous_count = vmem_trace_baseline_count.has(p_key) ? vmem_trace_baseline_count[p_key] : 0;
+		const int64_t current_count = vmem_trace_current_count.has(p_key) ? vmem_trace_current_count[p_key] : 0;
+		TreeItem *item = vmem_trace_diff_tree->create_item(root);
+		item->set_text(0, (p_key >> 32) ? TTR("GPU backing") : TTR("Native CPU"));
+		item->set_text(1, itos(p_key & UINT32_MAX));
+		item->set_text(2, itos(previous));
+		item->set_text(3, itos(current));
+		item->set_text(4, itos(current - previous));
+		item->set_text(5, vformat("%d -> %d", previous_count, current_count));
+	};
+	for (const KeyValue<uint64_t, int64_t> &entry : vmem_trace_baseline_bytes) {
+		add_row(entry.key);
+	}
+	for (const KeyValue<uint64_t, int64_t> &entry : vmem_trace_current_bytes) {
+		if (!vmem_trace_baseline_bytes.has(entry.key)) {
+			add_row(entry.key);
+		}
+	}
+	vmem_capture_status->set_text(vformat("Comparing imported captures %d and %d by allocation category.",
+			vmem_trace_baseline_id, vmem_trace_current_id));
 }
 
 void ScriptEditorDebugger::_video_mem_trace_import() {
@@ -2925,6 +2986,27 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_event_more = memnew(Button(TTRC("Load Allocation Events")));
 		vmem_vb->add_child(vmem_event_more);
 		vmem_event_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_event_more));
+		vmem_vb->add_child(memnew(Label(TTRC("Imported Capture Comparison (CPU/GPU backing bytes by category):"))));
+		HBoxContainer *compare_bar = memnew(HBoxContainer);
+		vmem_trace_pin = memnew(Button(TTRC("Pin Imported Baseline")));
+		vmem_trace_pin->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_trace_pin_baseline));
+		compare_bar->add_child(vmem_trace_pin);
+		vmem_trace_compare = memnew(Button(TTRC("Compare Imported Captures")));
+		vmem_trace_compare->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_trace_compare));
+		compare_bar->add_child(vmem_trace_compare);
+		vmem_vb->add_child(compare_bar);
+		vmem_trace_diff_tree = memnew(Tree);
+		vmem_trace_diff_tree->set_columns(6);
+		vmem_trace_diff_tree->set_column_titles_visible(true);
+		vmem_trace_diff_tree->set_column_title(0, TTRC("Domain"));
+		vmem_trace_diff_tree->set_column_title(1, TTRC("Category"));
+		vmem_trace_diff_tree->set_column_title(2, TTRC("Baseline bytes"));
+		vmem_trace_diff_tree->set_column_title(3, TTRC("Current bytes"));
+		vmem_trace_diff_tree->set_column_title(4, TTRC("Delta bytes"));
+		vmem_trace_diff_tree->set_column_title(5, TTRC("Allocation counts"));
+		vmem_trace_diff_tree->set_hide_root(true);
+		vmem_trace_diff_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
+		vmem_vb->add_child(vmem_trace_diff_tree);
 		tabs->add_child(vmem_vb);
 
 		vmem_item_menu = memnew(PopupMenu);
