@@ -530,7 +530,7 @@ void Main::print_help(const char *p_binary) {
 	print_help_option("--render-thread <mode>", "Render thread mode (\"unsafe\" [deprecated], \"safe\", \"separate\").\n");
 #endif // DISABLE_DEPRECATED
 #ifdef TOOLS_ENABLED
-	print_help_option("--editor-render-thread-experimental", "Allow an explicitly requested separate render thread in the Windows Vulkan editor (experimental).\\n");
+	print_help_option("--editor-render-thread-experimental", "Allow an explicitly requested separate render thread in the Windows Vulkan editor (experimental).\n");
 #endif
 #if defined(DEBUG_ENABLED) || defined(TOOLS_ENABLED)
 	print_help_option("--remote-fs <address>", "Remote filesystem (<host/IP>[:<port>] address).\n", CLI_OPTION_AVAILABILITY_TEMPLATE_DEBUG);
@@ -2799,15 +2799,15 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		separate_thread_render = (int)GLOBAL_DEF("rendering/driver/threads/thread_model", OS::RENDER_THREAD_SAFE) == OS::RENDER_SEPARATE_THREAD;
 	}
 
-	#ifdef TOOLS_ENABLED
+#ifdef TOOLS_ENABLED
 	if (editor_render_thread_experimental) {
 #if defined(WINDOWS_ENABLED) && defined(THREADS_ENABLED)
 		if (!editor || project_manager || recovery_mode || !render_thread_mode_explicit || separate_thread_render != 1 || rendering_driver != "vulkan") {
-			OS::get_singleton()->print("The experimental editor render thread requires --editor --render-thread separate on Windows/Vulkan without recovery mode. Aborting.\\n");
+			OS::get_singleton()->print("The experimental editor render thread requires --editor --render-thread separate on Windows/Vulkan without recovery mode. Aborting.\n");
 			goto error;
 		}
 #else
-		OS::get_singleton()->print("Experimental editor render-thread mode requires a Windows build with threading. Aborting.\\n");
+		OS::get_singleton()->print("Experimental editor render-thread mode requires a Windows build with threading. Aborting.\n");
 		goto error;
 #endif
 	}
@@ -2816,7 +2816,7 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		separate_thread_render = 0;
 	}
 	if (editor) {
-		OS::get_singleton()->print("Editor render thread startup selection: %s (rendering driver: %s).\\n",
+		OS::get_singleton()->print("Editor render thread startup selection: %s (rendering driver: %s).\n",
 				separate_thread_render == 1 ? "separate (experimental)" : "safe", rendering_driver.utf8().get_data());
 	}
 #else
