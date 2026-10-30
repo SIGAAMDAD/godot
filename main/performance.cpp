@@ -33,6 +33,7 @@
 
 #include "core/config/engine.h"
 #include "core/object/class_db.h"
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/os/os.h"
 #include "core/variant/typed_array.h"
 #include "scene/main/node.h"
@@ -144,6 +145,11 @@ void Performance::_bind_methods() {
 #ifdef MODULE_TEXTURE_STREAMING_ENABLED
 	BIND_ENUM_CONSTANT(RENDER_STREAMING_TEXTURE_MEM_USED);
 #endif
+	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_NATIVE_LIVE);
+	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_NATIVE_PEAK);
+	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_GPU_BACKING_LIVE);
+	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_GPU_BACKING_PEAK);
+	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_EVENT_DROPS);
 	BIND_ENUM_CONSTANT(MONITOR_MAX);
 
 	BIND_ENUM_CONSTANT(MONITOR_TYPE_QUANTITY);
@@ -242,6 +248,11 @@ String Performance::get_monitor_name(Monitor p_monitor) const {
 #ifdef MODULE_TEXTURE_STREAMING_ENABLED
 		PNAME("video/streaming_texture_mem_used"),
 #endif
+		PNAME("memory/capture_native_live"),
+		PNAME("memory/capture_native_peak"),
+		PNAME("video/capture_gpu_backing_live"),
+		PNAME("video/capture_gpu_backing_peak"),
+		PNAME("memory/capture_event_drops"),
 	};
 	static_assert(std_size(names) == MONITOR_MAX);
 
@@ -260,6 +271,18 @@ double Performance::get_monitor(Monitor p_monitor) const {
 			return _physics_process_time;
 		case TIME_NAVIGATION_PROCESS:
 			return _navigation_process_time;
+		case MEMORY_CAPTURE_NATIVE_LIVE:
+			return GodotMemoryTracking::summary().live_bytes;
+		case MEMORY_CAPTURE_NATIVE_PEAK:
+			return GodotMemoryTracking::summary().peak_bytes;
+		case MEMORY_CAPTURE_GPU_BACKING_LIVE:
+			return GodotMemoryTracking::summary().gpu_allocation_bytes;
+		case MEMORY_CAPTURE_GPU_BACKING_PEAK:
+			return GodotMemoryTracking::summary().gpu_peak_bytes;
+		case MEMORY_CAPTURE_EVENT_DROPS: {
+			const GodotMemoryTracking::Summary tracked = GodotMemoryTracking::summary();
+			return tracked.dropped_records + tracked.overwritten_events;
+		}
 		case MEMORY_STATIC:
 			return Memory::get_mem_usage();
 		case MEMORY_STATIC_MAX:
@@ -547,6 +570,11 @@ Performance::MonitorType Performance::get_monitor_type(Monitor p_monitor) const 
 #ifdef MODULE_TEXTURE_STREAMING_ENABLED
 		MONITOR_TYPE_MEMORY,
 #endif // MODULE_TEXTURE_STREAMING_ENABLED
+		MONITOR_TYPE_MEMORY,
+		MONITOR_TYPE_MEMORY,
+		MONITOR_TYPE_MEMORY,
+		MONITOR_TYPE_MEMORY,
+		MONITOR_TYPE_QUANTITY,
 	};
 	static_assert((sizeof(types) / sizeof(MonitorType)) == MONITOR_MAX);
 
