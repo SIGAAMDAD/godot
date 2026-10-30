@@ -28,7 +28,7 @@ namespace GodotMemoryTracking {
 // Exported trace records intentionally do not contain process pointers.
 struct TraceVisitor {
 	bool (*on_event)(const Event &, void *) = nullptr;
-	bool (*on_record)(const Record &, bool p_gpu, void *) = nullptr;
+	bool (*on_record)(const Record &, uint8_t p_domain, void *) = nullptr;
 	bool (*on_summary)(const Summary &, void *) = nullptr;
 	void *userdata = nullptr;
 };
