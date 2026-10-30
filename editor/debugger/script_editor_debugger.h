@@ -110,6 +110,7 @@ private:
 	enum FileDialogPurpose {
 		SAVE_MONITORS_CSV,
 		SAVE_VRAM_CSV,
+		SAVE_MEMORY_CAPTURE_CSV,
 	};
 	FileDialogPurpose file_dialog_purpose = SAVE_MONITORS_CSV;
 
@@ -154,6 +155,7 @@ private:
 	uint64_t vmem_event_next_sequence = 1;
 	Tree *vmem_event_tree = nullptr;
 	Button *vmem_event_more = nullptr;
+	Button *vmem_capture_export = nullptr;
 	int64_t vmem_capture_id = 0;
 	int64_t vmem_alloc_next_offset = 0;
 	TextureRect *vmem_notice_icon = nullptr;
@@ -273,6 +275,7 @@ private:
 	void _video_mem_capture_more();
 	void _video_mem_capture_gpu_more();
 	void _video_mem_capture_event_more();
+	void _video_mem_capture_export();
 	void _video_mem_export();
 
 	void _resources_reimported(const PackedStringArray &p_resources);
