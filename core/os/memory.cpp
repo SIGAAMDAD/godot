@@ -30,6 +30,7 @@
 
 #include "memory.h"
 
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/profiling/profiling.h"
 #include "core/templates/safe_refcount.h"
 
@@ -63,6 +64,7 @@ void *Memory::alloc_aligned_static(size_t p_bytes, size_t p_alignment) {
 
 	p2 = (void *)(((uintptr_t)p1 + sizeof(uint32_t) + p_alignment - 1) & ~((p_alignment)-1));
 	*((uint32_t *)p2 - 1) = (uint32_t)((uintptr_t)p2 - (uintptr_t)p1);
+	GodotMemoryTracking::record_alloc(p2, p_bytes);
 	return p2;
 }
 
@@ -82,6 +84,7 @@ void *Memory::realloc_aligned_static(void *p_memory, size_t p_bytes, size_t p_pr
 void Memory::free_aligned_static(void *p_memory) {
 	uint32_t offset = *((uint32_t *)p_memory - 1);
 	void *p = (void *)((uint8_t *)p_memory - offset);
+	GodotMemoryTracking::record_free(p_memory);
 	GodotProfileFree(p);
 	free(p);
 }
@@ -114,8 +117,10 @@ void *Memory::alloc_static(size_t p_bytes, bool p_pad_align) {
 		uint64_t new_mem_usage = _current_mem_usage.add(p_bytes);
 		_max_mem_usage.exchange_if_greater(new_mem_usage);
 #endif
+		GodotMemoryTracking::record_alloc(s8 + DATA_OFFSET, p_bytes);
 		return s8 + DATA_OFFSET;
 	} else {
+		GodotMemoryTracking::record_alloc(mem, p_bytes);
 		return mem;
 	}
 }
@@ -150,6 +155,7 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 #endif
 
 		if (p_bytes == 0) {
+			GodotMemoryTracking::record_free(p_memory);
 			GodotProfileFree(mem);
 			free(mem);
 			return nullptr;
@@ -165,6 +171,7 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 
 			*s = p_bytes;
 
+			GodotMemoryTracking::record_realloc(p_memory, mem + DATA_OFFSET, p_bytes, true);
 			return mem + DATA_OFFSET;
 		}
 	} else {
@@ -174,12 +181,14 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 		ERR_FAIL_COND_V(mem == nullptr && p_bytes > 0, nullptr);
 		GodotProfileAlloc(mem, p_bytes);
 
+		GodotMemoryTracking::record_realloc(p_memory, mem, p_bytes, mem != nullptr || p_bytes == 0);
 		return mem;
 	}
 }
 
 void Memory::free_static(void *p_ptr, bool p_pad_align) {
 	ERR_FAIL_NULL(p_ptr);
+	GodotMemoryTracking::record_free(p_ptr);
 
 	uint8_t *mem = (uint8_t *)p_ptr;
 
