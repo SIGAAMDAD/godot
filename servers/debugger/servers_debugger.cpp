@@ -544,6 +544,9 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			result.push_back(int64_t(ev[i].kind));
 			result.push_back(ev[i].gpu);
 			result.push_back(int64_t(ev[i].stack_id));
+			result.push_back(int64_t(ev[i].timestamp_us));
+			result.push_back(int64_t(ev[i].thread_id));
+			result.push_back(int64_t(ev[i].frame_id));
 		}
 		EngineDebugger::get_singleton()->send_message("servers:memprof_events", result);
 	} else if (p_cmd == "draw") { // Forced redraw.
