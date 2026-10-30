@@ -25,6 +25,12 @@
 #include <mutex>
 #include <new>
 #include <thread>
+#include <cstring>
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__GLIBC__) || defined(__APPLE__)
+#include <execinfo.h>
+#endif
 
 namespace GodotMemoryTracking {
 namespace {
@@ -33,6 +39,8 @@ constexpr size_t SHARD_COUNT = 64;
 constexpr size_t RECORDS_PER_SHARD = 2048;
 constexpr size_t EVENT_CAPACITY = 16384;
 constexpr uintptr_t TOMBSTONE = 1;
+constexpr size_t CALLSTACK_CAPACITY = 8192;
+constexpr size_t CALLSTACK_DEPTH = 12;
 
 struct Slot {
 	uintptr_t address = 0;
@@ -40,6 +48,14 @@ struct Slot {
 	uint64_t bytes = 0;
 	uint32_t category = 0;
 	uint32_t generation = 0;
+	uint32_t stack_id = 0;
+};
+
+struct StackEntry {
+	uint64_t signature = 0;
+	uint32_t id = 0;
+	uint32_t depth = 0;
+	uintptr_t frames[CALLSTACK_DEPTH] = {};
 };
 
 struct Shard {
@@ -52,6 +68,8 @@ struct State {
 	std::atomic<uint32_t> active_hooks{ 0 };
 	std::mutex lifecycle_mutex;
 	std::mutex event_mutex;
+	std::mutex callstack_mutex;
+	StackEntry callstacks[CALLSTACK_CAPACITY];
 	Shard shards[SHARD_COUNT];
 	Shard gpu_shards[SHARD_COUNT];
 	Shard logical_shards[SHARD_COUNT];
@@ -94,13 +112,68 @@ size_t slot_index(uintptr_t p_ptr) {
 	return (size_t)h & (RECORDS_PER_SHARD - 1);
 }
 
+
+uint32_t sample_stack(State *p_state) {
+	void *sample[CALLSTACK_DEPTH] = {};
+	size_t count = 0;
+#if defined(_WIN32)
+	count = CaptureStackBackTrace(3, (DWORD)CALLSTACK_DEPTH, sample, nullptr);
+#elif defined(__GLIBC__) || defined(__APPLE__)
+	const int depth = backtrace(sample, int(CALLSTACK_DEPTH));
+	if (depth > 3) {
+		count = size_t(depth - 3);
+		for (size_t i = 0; i < count; ++i) {
+			sample[i] = sample[i + 3];
+		}
+	}
+#endif
+	if (!count) {
+		return 0;
+	}
+	uint64_t signature = UINT64_C(14695981039346656037);
+	for (size_t i = 0; i < count; ++i) {
+		signature = (signature ^ (uint64_t)(uintptr_t)sample[i]) * UINT64_C(1099511628211);
+	}
+	if (!signature) {
+		signature = 1;
+	}
+	std::lock_guard<std::mutex> guard(p_state->callstack_mutex);
+	const size_t first = size_t(signature) & (CALLSTACK_CAPACITY - 1);
+	for (size_t i = 0; i < CALLSTACK_CAPACITY; ++i) {
+		const size_t slot = (first + i) & (CALLSTACK_CAPACITY - 1);
+		StackEntry &entry = p_state->callstacks[slot];
+		if (!entry.id) {
+			entry.signature = signature;
+			entry.id = uint32_t(slot + 1);
+			entry.depth = uint32_t(count);
+			for (size_t f = 0; f < count; ++f) {
+				entry.frames[f] = (uintptr_t)sample[f];
+			}
+			return entry.id;
+		}
+		if (entry.signature == signature && entry.depth == count) {
+			bool equal = true;
+			for (size_t f = 0; f < count; ++f) {
+				if (entry.frames[f] != (uintptr_t)sample[f]) {
+					equal = false;
+					break;
+				}
+			}
+			if (equal) {
+				return entry.id;
+			}
+		}
+	}
+	return 0; // A full stack dictionary does not invalidate allocation data.
+}
+
 void write_event(State *p_state, RecordKind p_kind, const Slot &p_record, bool p_gpu = false) {
 	// Publish sequence and payload under the same lock. A producer that obtains
 	// its sequence before taking the lock could otherwise overwrite a newer
 	// event after another producer has already committed it.
 	std::lock_guard<std::mutex> guard(p_state->event_mutex);
 	const uint64_t seq = p_state->sequence.load(std::memory_order_relaxed) + 1;
-	p_state->event_ring[(seq - 1) % EVENT_CAPACITY] = { seq, p_record.allocation_id, p_record.address, p_record.bytes, p_record.category, p_kind, p_gpu };
+	p_state->event_ring[(seq - 1) % EVENT_CAPACITY] = { seq, p_record.allocation_id, p_record.address, p_record.bytes, p_record.category, p_kind, p_gpu, p_record.stack_id };
 	p_state->sequence.store(seq, std::memory_order_release);
 	if (seq > EVENT_CAPACITY) {
 		p_state->overwritten_events.fetch_add(1, std::memory_order_relaxed);
@@ -115,6 +188,7 @@ void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind 
 	if (p_address <= TOMBSTONE) {
 		return;
 	}
+	const uint32_t stack_id = sample_stack(p_state);
 	Shard &shard = (p_logical ? p_state->logical_shards : p_gpu ? p_state->gpu_shards : p_state->shards)[shard_index(p_address)];
 	Slot added;
 	bool inserted = false;
@@ -130,6 +204,7 @@ void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind 
 				live_bytes.fetch_sub(s.bytes, std::memory_order_relaxed);
 				s.bytes = p_bytes;
 				s.category = active_category;
+				s.stack_id = stack_id;
 				added = s;
 				inserted = true;
 				break;
@@ -149,6 +224,7 @@ void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind 
 			s.address = p_address;
 			s.bytes = p_bytes;
 			s.category = active_category;
+			s.stack_id = stack_id;
 			s.generation++;
 			s.allocation_id = total_allocations.fetch_add(1, std::memory_order_relaxed) + 1;
 			live_allocations.fetch_add(1, std::memory_order_relaxed);
@@ -228,6 +304,12 @@ bool start() {
 		std::this_thread::yield();
 	}
 	// No hooks are active; clear all bounded state.
+	{
+		std::lock_guard<std::mutex> stack_guard(p->callstack_mutex);
+		for (StackEntry &entry : p->callstacks) {
+			entry = StackEntry();
+		}
+	}
 	for (Shard &shard : p->shards) {
 		std::lock_guard<std::mutex> shard_guard(shard.mutex);
 		for (Slot &s : shard.slots) {
@@ -327,7 +409,7 @@ static size_t enumerate_records(size_t p_offset, Record *r_records, size_t p_cap
 			if (count == p_capacity) {
 				return count;
 			}
-			r_records[count++] = { s.allocation_id, s.address, s.bytes, s.category, s.generation };
+			r_records[count++] = { s.allocation_id, s.address, s.bytes, s.category, s.generation, s.stack_id };
 		}
 	}
 	return count;
@@ -343,6 +425,23 @@ size_t gpu_live_records(size_t p_offset, Record *r_records, size_t p_capacity) {
 
 size_t gpu_logical_live_records(size_t p_offset, Record *r_records, size_t p_capacity) {
 	return enumerate_records(p_offset, r_records, p_capacity, 2);
+}
+
+size_t callstack(uint32_t p_stack_id, uintptr_t *r_frames, size_t p_capacity) {
+	State *p = state.load(std::memory_order_acquire);
+	if (!p || !r_frames || !p_capacity || p_stack_id == 0 || p_stack_id > CALLSTACK_CAPACITY) {
+		return 0;
+	}
+	std::lock_guard<std::mutex> guard(p->callstack_mutex);
+	const StackEntry &entry = p->callstacks[p_stack_id - 1];
+	if (entry.id != p_stack_id) {
+		return 0;
+	}
+	const size_t count = entry.depth < p_capacity ? entry.depth : p_capacity;
+	for (size_t i = 0; i < count; ++i) {
+		r_frames[i] = entry.frames[i];
+	}
+	return count;
 }
 
 size_t events(uint64_t p_first, Event *r_events, size_t p_capacity) {
