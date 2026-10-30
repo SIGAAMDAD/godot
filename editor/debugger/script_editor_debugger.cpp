@@ -439,6 +439,9 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 						event.kind == GodotMemoryTracking::RecordKind::FREE ? TTR("Free") : TTR("Realloc"));
 				row->set_text(6, event.gpu ? TTR("GPU") : TTR("CPU"));
 				row->set_text(7, itos(event.stack_id));
+				row->set_text(8, itos(event.timestamp_us));
+				row->set_text(9, itos(event.thread_id));
+				row->set_text(10, itos(event.frame_id));
 				row->set_metadata(0, int64_t(event.stack_id));
 			}
 			vmem_alloc_more->set_disabled(true);
@@ -978,7 +981,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, con
 	}
 	const int64_t first = p_data[1];
 	const int64_t count = p_data[2];
-	if (first != int64_t(vmem_event_next_sequence) || count < 0 || count > 32 || p_data.size() != 3 + count * 8) {
+	if (first != int64_t(vmem_event_next_sequence) || count < 0 || count > 32 || p_data.size() != 3 + count * 11) {
 		return;
 	}
 	TreeItem *root = vmem_event_tree->get_root();
@@ -986,7 +989,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, con
 		root = vmem_event_tree->create_item();
 	}
 	for (int64_t i = 0; i < count; ++i) {
-		const int index = 3 + int(i) * 8;
+		const int index = 3 + int(i) * 11;
 		const uint64_t sequence = uint64_t(int64_t(p_data[index]));
 		TreeItem *item = vmem_event_tree->create_item(root);
 		item->set_text(0, itos(int64_t(sequence)));
@@ -998,6 +1001,9 @@ void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, con
 		item->set_text(5, kind == 0 ? TTR("Alloc") : kind == 1 ? TTR("Free") : TTR("Realloc"));
 		item->set_text(6, bool(p_data[index + 6]) ? TTR("GPU") : TTR("CPU"));
 		item->set_text(7, itos(int64_t(p_data[index + 7])));
+		item->set_text(8, itos(int64_t(p_data[index + 8])));
+		item->set_text(9, itos(int64_t(p_data[index + 9])));
+		item->set_text(10, itos(int64_t(p_data[index + 10])));
 		item->set_metadata(0, int64_t(p_data[index + 7]));
 		vmem_event_next_sequence = sequence + 1;
 	}
@@ -3135,7 +3141,7 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 
 		native_details->add_child(memnew(Label(TTRC("Allocation/free timeline (bounded ring; lost events shown in capture status):"))));
 		vmem_event_tree = memnew(Tree);
-		vmem_event_tree->set_columns(8);
+		vmem_event_tree->set_columns(11);
 		vmem_event_tree->set_column_titles_visible(true);
 		vmem_event_tree->set_column_title(0, TTRC("Sequence"));
 		vmem_event_tree->set_column_title(1, TTRC("Allocation ID"));
@@ -3145,6 +3151,9 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_event_tree->set_column_title(5, TTRC("Event"));
 		vmem_event_tree->set_column_title(6, TTRC("Memory"));
 		vmem_event_tree->set_column_title(7, TTRC("Stack ID"));
+		vmem_event_tree->set_column_title(8, TTRC("Timestamp (us)"));
+		vmem_event_tree->set_column_title(9, TTRC("Thread"));
+		vmem_event_tree->set_column_title(10, TTRC("Frame"));
 		vmem_event_tree->set_hide_root(true);
 		vmem_event_tree->connect(SceneStringName(item_selected), callable_mp(this, &ScriptEditorDebugger::_video_mem_stack_selected).bind(vmem_event_tree));
 		vmem_event_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
