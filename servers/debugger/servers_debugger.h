@@ -119,6 +119,10 @@ private:
 	double last_draw_time = 0.0;
 	Ref<ServersProfiler> servers_profiler;
 	Ref<VisualProfiler> visual_profiler;
+	// A stopped capture's bounded trace is built once, then transferred in
+	// requested pages. This keeps capture transport off the render worker.
+	Vector<uint8_t> memory_trace_cache;
+	uint64_t memory_trace_capture_id = 0;
 
 	static ServersDebugger *singleton;
 
