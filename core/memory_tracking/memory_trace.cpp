@@ -29,7 +29,7 @@ constexpr size_t MAX_TRACE_BYTES = 32 * 1024 * 1024;
 constexpr size_t MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 constexpr size_t HEADER_SIZE = 52;
 constexpr size_t CHUNK_HEADER_SIZE = 24;
-constexpr size_t ROW_SIZE = 32;
+constexpr size_t ROW_SIZE = 40;
 constexpr size_t FOOTER_SIZE = 100;
 constexpr uint64_t HASH_BASIS = UINT64_C(14695981039346656037);
 constexpr uint64_t HASH_PRIME = UINT64_C(1099511628211);
@@ -124,8 +124,8 @@ void write_event(uint8_t *p_dst, const Event &p_event) {
 	put32(p_dst + 24, p_event.category);
 	p_dst[28] = uint8_t(p_event.kind);
 	p_dst[29] = p_event.gpu ? 1 : 0;
-	p_dst[30] = 0;
-	p_dst[31] = 0;
+	put32(p_dst + 30, p_event.stack_id);
+	std::memset(p_dst + 34, 0, 6);
 }
 void write_record(uint8_t *p_dst, const Record &p_record, uint8_t p_domain) {
 	put64(p_dst, p_record.allocation_id);
@@ -133,7 +133,8 @@ void write_record(uint8_t *p_dst, const Record &p_record, uint8_t p_domain) {
 	put32(p_dst + 16, p_record.category);
 	put32(p_dst + 20, p_record.generation);
 	p_dst[24] = p_domain;
-	std::memset(p_dst + 25, 0, 7);
+	put32(p_dst + 25, p_record.stack_id);
+	std::memset(p_dst + 29, 0, 11);
 }
 }
 
@@ -148,6 +149,7 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 	uint8_t header[HEADER_SIZE] = {};
 	std::memcpy(header, "GDMEM001", 8);
 	put16(header + 8, 1);
+	put16(header + 10, 1); // v1.1 carries stack attribution IDs
 	put64(header + 24, begin.capture_id);
 	put64(header + 32, 1000000); // microsecond tick frequency
 	put32(header + 48, crc32(header, 48));
@@ -222,7 +224,7 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_visitor) {
 	if (!p_bytes || p_size < HEADER_SIZE + CHUNK_HEADER_SIZE + FOOTER_SIZE || p_size > MAX_TRACE_BYTES ||
 			std::memcmp(p_bytes, "GDMEM001", 8) != 0 || get16(p_bytes + 8) != 1 ||
-			get16(p_bytes + 10) != 0 || get32(p_bytes + 12) != 0 ||
+			get16(p_bytes + 10) != 1 || get32(p_bytes + 12) != 0 ||
 			get32(p_bytes + 48) != crc32(p_bytes, 48)) {
 		return false;
 	}
@@ -263,6 +265,7 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 					}
 					event.kind = RecordKind(row[28]);
 					event.gpu = row[29] != 0;
+					event.stack_id = get32(row + 30);
 					last_seq = event.sequence;
 					if (p_visitor.on_event && !p_visitor.on_event(event, p_visitor.userdata)) {
 						return false;
@@ -273,6 +276,7 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 					record.bytes = get64(row + 8);
 					record.category = get32(row + 16);
 					record.generation = get32(row + 20);
+					record.stack_id = get32(row + 25);
 					if (row[24] > 2) {
 						return false;
 					}
