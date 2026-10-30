@@ -121,6 +121,16 @@ void set_category(uint32_t p_category);
 // Called once per main frame; allocated events sample this published frame ID.
 void set_frame(uint64_t p_frame);
 
+struct RendererSample {
+	uint64_t sequence = 0;
+	uint64_t renderer_frame_us = 0;
+	uint64_t render_thread_id = 0;
+};
+
+void publish_renderer_sample(uint64_t p_duration_us);
+bool renderer_sample(RendererSample &r_sample);
+
+
 class ScopeCategory {
 	uint32_t previous;
 
