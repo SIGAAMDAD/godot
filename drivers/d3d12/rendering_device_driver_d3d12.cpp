@@ -6053,6 +6053,21 @@ uint64_t RenderingDeviceDriverD3D12::get_resource_native_handle(DriverResource p
 	}
 }
 
+RenderingDeviceDriverD3D12::MemoryBudgetSnapshot RenderingDeviceDriverD3D12::get_memory_budget_snapshot() {
+	MemoryBudgetSnapshot snapshot;
+	if (!allocator) {
+		return snapshot;
+	}
+	D3D12MA::Budget local_budget;
+	D3D12MA::Budget non_local_budget;
+	allocator->GetBudget(&local_budget, &non_local_budget);
+	snapshot.allocated_bytes = local_budget.Stats.AllocationBytes + non_local_budget.Stats.AllocationBytes;
+	snapshot.reserved_bytes = local_budget.Stats.BlockBytes + non_local_budget.Stats.BlockBytes;
+	snapshot.budget_bytes = local_budget.BudgetBytes + non_local_budget.BudgetBytes;
+	snapshot.supported = true;
+	return snapshot;
+}
+
 uint64_t RenderingDeviceDriverD3D12::get_total_memory_used() {
 	D3D12MA::Budget local_budget;
 	D3D12MA::Budget non_local_budget;
