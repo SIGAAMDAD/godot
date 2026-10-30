@@ -32,6 +32,7 @@
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/os/os.h"
 #include "drivers/d3d12/d3d12_hooks.h"
 #include "drivers/d3d12/rendering_context_driver_d3d12.h"
@@ -1018,6 +1019,9 @@ RDD::BufferID RenderingDeviceDriverD3D12::buffer_create(uint64_t p_size, BitFiel
 	buf_info->size = original_size;
 	buf_info->device_address_uav_alloc = device_address_uav_alloc;
 	buf_info->flags.is_dynamic = p_usage.has_flag(BUFFER_USAGE_DYNAMIC_PERSISTENT_BIT);
+	if (buf_info->owner_info.allocation) {
+		GodotMemoryTracking::record_gpu_alloc(buf_info->owner_info.allocation.Get(), buf_info->owner_info.allocation->GetSize());
+	}
 
 	return BufferID(buf_info);
 }
@@ -1030,6 +1034,9 @@ bool RenderingDeviceDriverD3D12::buffer_set_texel_format(BufferID p_buffer, Data
 
 void RenderingDeviceDriverD3D12::buffer_free(BufferID p_buffer) {
 	BufferInfo *buf_info = (BufferInfo *)p_buffer.id;
+	if (buf_info->owner_info.allocation) {
+		GodotMemoryTracking::record_gpu_free(buf_info->owner_info.allocation.Get());
+	}
 
 	if (buf_info->device_address_uav_alloc.virtual_alloc_handle != 0) {
 		MutexLock lock(resource_descriptor_heap_mutex);
@@ -1635,6 +1642,9 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create(const TextureFormat &p
 	tex_info->mipmaps = resource_desc.MipLevels;
 	tex_info->view_descs.srv = srv_desc;
 	tex_info->view_descs.uav = uav_desc;
+	if (tex_info->owner_info.allocation) {
+		GodotMemoryTracking::record_gpu_alloc(tex_info->owner_info.allocation.Get(), tex_info->owner_info.allocation->GetSize());
+	}
 
 	return TextureID(tex_info);
 }
@@ -1891,6 +1901,9 @@ RDD::TextureID RenderingDeviceDriverD3D12::_texture_create_shared_from_slice(Tex
 
 void RenderingDeviceDriverD3D12::texture_free(TextureID p_texture) {
 	TextureInfo *tex_info = (TextureInfo *)p_texture.id;
+	if (tex_info->owner_info.allocation) {
+		GodotMemoryTracking::record_gpu_free(tex_info->owner_info.allocation.Get());
+	}
 	VersatileResource::free(resources_allocator, tex_info);
 }
 
