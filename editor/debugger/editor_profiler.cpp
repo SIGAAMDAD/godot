@@ -29,6 +29,9 @@
 /**************************************************************************/
 
 #include "editor_profiler.h"
+#include "core/memory_tracking/memory_tracker.h"
+#include "core/config/engine.h"
+#include "core/os/os.h"
 
 #include "core/io/image.h"
 #include "core/object/callable_mp.h"
@@ -90,6 +93,89 @@ void EditorProfiler::add_frame_metric(const Metric &p_metric, bool p_final) {
 	if (plot_delay->is_stopped()) {
 		plot_delay->set_wait_time(0.1);
 		plot_delay->start();
+	}
+}
+
+
+void EditorProfiler::add_remote_memory_sample(uint64_t p_capture, uint64_t p_frame, uint64_t p_cpu,
+		uint64_t p_gpu_backing, uint64_t p_gpu_logical, uint64_t p_total_allocations, uint64_t p_event_drops) {
+	const uint64_t now = OS::get_singleton()->get_ticks_usec();
+	if (!remote_memory_samples.is_empty() && remote_memory_samples[remote_memory_samples.size() - 1].capture_id != p_capture) {
+		remote_memory_samples.clear();
+		remote_last_allocation_total = 0;
+	}
+	MemorySample sample;
+	sample.capture_id = p_capture;
+	sample.frame_id = p_frame;
+	sample.timestamp_us = now;
+	sample.cpu_live_bytes = double(p_cpu);
+	sample.gpu_backing_bytes = double(p_gpu_backing);
+	sample.gpu_logical_bytes = double(p_gpu_logical);
+	sample.event_drops = double(p_event_drops);
+	if (!remote_memory_samples.is_empty() && p_total_allocations >= remote_last_allocation_total) {
+		const uint64_t elapsed = now - remote_memory_samples[remote_memory_samples.size() - 1].timestamp_us;
+		if (elapsed) {
+			sample.allocation_rate = double(p_total_allocations - remote_last_allocation_total) * 1000000.0 / elapsed;
+		}
+	}
+	remote_last_allocation_total = p_total_allocations;
+	remote_memory_samples.push_back(sample);
+	if (remote_memory_samples.size() > 900) {
+		remote_memory_samples.remove_at(0);
+	}
+	if (memory_source && memory_source->get_selected() == 1) {
+		memory_graph->queue_redraw();
+	}
+}
+
+void EditorProfiler::_memory_graph_changed(int p_selection) {
+	if (memory_graph) {
+		memory_graph->queue_redraw();
+	}
+}
+
+void EditorProfiler::_draw_memory_graph() {
+	if (!memory_graph || !memory_source || !memory_metric) {
+		return;
+	}
+	const bool editor_source = memory_source->get_selected() == 0;
+	const Vector<MemorySample> &samples = editor_source ? editor_memory_samples : remote_memory_samples;
+	const int metric = memory_metric->get_selected();
+	if (samples.is_empty()) {
+		memory_graph_value->set_text(editor_source ? TTR("No editor samples") : TTR("No remote capture samples"));
+		return;
+	}
+	auto get_value = [metric](const MemorySample &p_sample) -> double {
+		switch (metric) {
+			case 0: return p_sample.cpu_live_bytes;
+			case 1: return p_sample.gpu_backing_bytes;
+			case 2: return p_sample.gpu_logical_bytes;
+			case 3: return p_sample.allocation_rate;
+			case 4: return p_sample.event_drops;
+			default: return 0;
+		}
+	};
+	const double latest = get_value(samples[samples.size() - 1]);
+	const String label = metric < 3 ? String::humanize_size(uint64_t(latest)) :
+			metric == 3 ? vformat("%.1f allocations/s", latest) : vformat("%.0f dropped events", latest);
+	memory_graph_value->set_text((editor_source ? "Editor (self): " : "Debugged game: ") + label);
+	double max_value = 1.0;
+	for (const MemorySample &sample : samples) {
+		max_value = MAX(max_value, get_value(sample));
+	}
+	const Size2 size = memory_graph->get_size();
+	if (size.x <= 0 || size.y <= 0 || samples.size() < 2) {
+		return;
+	}
+	const Color accent = get_theme_color(SNAME("accent_color"), EditorStringName(Editor));
+	for (int i = 1; i < samples.size(); ++i) {
+		const double previous = get_value(samples[i - 1]);
+		const double current = get_value(samples[i]);
+		const float x0 = float(i - 1) * size.x / float(samples.size() - 1);
+		const float x1 = float(i) * size.x / float(samples.size() - 1);
+		const float y0 = size.y - float(previous / max_value) * size.y;
+		const float y1 = size.y - float(current / max_value) * size.y;
+		memory_graph->draw_line(Point2(x0, y0), Point2(x1, y1), accent, MAX(1.0f, EDSCALE));
 	}
 }
 
@@ -461,6 +547,35 @@ void EditorProfiler::_autostart_toggled(bool p_toggled_on) {
 
 void EditorProfiler::_notification(int p_what) {
 	switch (p_what) {
+		case NOTIFICATION_PROCESS: {
+			const uint64_t now = OS::get_singleton()->get_ticks_usec();
+			if (last_editor_memory_sample_us && now - last_editor_memory_sample_us < 100000) {
+				break;
+			}
+			const uint64_t previous_time = last_editor_memory_sample_us;
+			last_editor_memory_sample_us = now;
+			const GodotMemoryTracking::Summary counters = GodotMemoryTracking::summary();
+			MemorySample sample;
+			sample.capture_id = counters.capture_id;
+			sample.frame_id = Engine::get_singleton()->get_process_frames();
+			sample.timestamp_us = now;
+			sample.cpu_live_bytes = double(counters.live_bytes);
+			sample.gpu_backing_bytes = double(counters.gpu_allocation_bytes);
+			sample.gpu_logical_bytes = double(counters.gpu_logical_bytes);
+			sample.event_drops = double(counters.dropped_records + counters.overwritten_events);
+			if (previous_time && now > previous_time && counters.total_allocations >= editor_last_allocation_total) {
+				sample.allocation_rate = double(counters.total_allocations - editor_last_allocation_total) *
+						1000000.0 / double(now - previous_time);
+			}
+			editor_last_allocation_total = counters.total_allocations;
+			editor_memory_samples.push_back(sample);
+			if (editor_memory_samples.size() > 900) {
+				editor_memory_samples.remove_at(0);
+			}
+			if (memory_source && memory_source->get_selected() == 0) {
+				memory_graph->queue_redraw();
+			}
+		} break;
 		case NOTIFICATION_TRANSLATION_CHANGED: {
 			if (is_ready()) {
 				_update_frame();
@@ -826,6 +941,34 @@ EditorProfiler::EditorProfiler() {
 	plot_delay->set_one_shot(true);
 	add_child(plot_delay);
 	plot_delay->connect("timeout", callable_mp(this, &EditorProfiler::_update_plot));
+
+	HBoxContainer *memory_toolbar = memnew(HBoxContainer);
+	add_child(memory_toolbar);
+	memory_toolbar->add_child(memnew(Label(TTRC("Memory series:"))));
+	memory_source = memnew(OptionButton);
+	memory_source->add_item(TTRC("Editor (self)"));
+	memory_source->add_item(TTRC("Debugged game"));
+	memory_source->set_accessibility_name(TTRC("Memory source process"));
+	memory_source->connect(SceneStringName(item_selected), callable_mp(this, &EditorProfiler::_memory_graph_changed));
+	memory_toolbar->add_child(memory_source);
+	memory_metric = memnew(OptionButton);
+	memory_metric->add_item(TTRC("Native CPU bytes"));
+	memory_metric->add_item(TTRC("GPU backing bytes"));
+	memory_metric->add_item(TTRC("GPU logical RID bytes"));
+	memory_metric->add_item(TTRC("Allocation rate"));
+	memory_metric->add_item(TTRC("Dropped events"));
+	memory_metric->set_accessibility_name(TTRC("Memory metric"));
+	memory_metric->connect(SceneStringName(item_selected), callable_mp(this, &EditorProfiler::_memory_graph_changed));
+	memory_toolbar->add_child(memory_metric);
+	memory_graph_value = memnew(Label);
+	memory_graph_value->set_h_size_flags(SIZE_EXPAND_FILL);
+	memory_toolbar->add_child(memory_graph_value);
+	memory_graph = memnew(Control);
+	memory_graph->set_custom_minimum_size(Size2(0, 96 * EDSCALE));
+	memory_graph->set_clip_contents(true);
+	memory_graph->connect(SceneStringName(draw), callable_mp(this, &EditorProfiler::_draw_memory_graph));
+	add_child(memory_graph);
+	set_process(true);
 
 	plot_sigs.insert("physics_frame_time");
 	plot_sigs.insert("category_frame_time");
