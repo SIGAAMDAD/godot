@@ -1586,7 +1586,7 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 			editor_render_thread_experimental = true;
 		} else if (arg == "--editor-render-thread-benchmark") {
 			if (!N) {
-				OS::get_singleton()->print("Missing editor render-thread benchmark CSV path.\\n");
+				OS::get_singleton()->print("Missing editor render-thread benchmark CSV path.\n");
 				goto error;
 			}
 			editor_thread_benchmark_path = N->get();
@@ -2835,14 +2835,14 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 	if (!editor_thread_benchmark_path.is_empty()) {
 		if (!editor || project_manager || !render_thread_mode_explicit ||
 				(separate_thread_render && !editor_render_thread_experimental)) {
-			OS::get_singleton()->print("Editor render-thread benchmark requires --editor with explicit --render-thread safe or --render-thread separate and the experimental flag for separate mode.\\n");
+			OS::get_singleton()->print("Editor render-thread benchmark requires --editor with explicit --render-thread safe or --render-thread separate and the experimental flag for separate mode.\n");
 			goto error;
 		}
 		editor_thread_benchmark_host = OS::get_singleton()->get_environment("GODOT_BENCH_HOST_ID");
 		editor_thread_benchmark_workload = OS::get_singleton()->get_environment("GODOT_BENCH_WORKLOAD_ID");
 		editor_thread_benchmark_workload_hash = OS::get_singleton()->get_environment("GODOT_BENCH_WORKLOAD_SHA256");
 		if (editor_thread_benchmark_host.is_empty() || editor_thread_benchmark_workload.is_empty() || editor_thread_benchmark_workload_hash.length() != 64) {
-			OS::get_singleton()->print("Editor benchmark requires host/workload environment metadata and a 64-character workload SHA-256.\\n");
+			OS::get_singleton()->print("Editor benchmark requires host/workload environment metadata and a 64-character workload SHA-256.\n");
 			goto error;
 		}
 	}
@@ -5291,9 +5291,9 @@ bool Main::iteration() {
 			editor_thread_benchmark_file = std::fopen(editor_thread_benchmark_path.utf8().get_data(), "wb");
 			if (editor_thread_benchmark_file) {
 				editor_thread_benchmark_run_id = OS::get_singleton()->get_ticks_usec();
-				std::fprintf(editor_thread_benchmark_file, "build_sha,host_id,backend,viewport_width,viewport_height,vsync,scaling_mode,workload_id,workload_sha256,run_id,trial_id,requested_mode,effective_mode,editor_main_frame_us,frame_id,capture_id,errors,render_queue_wait_us,render_server_frame_us,gpu_frame_us,input_to_paint_us\\n");
+				std::fprintf(editor_thread_benchmark_file, "build_sha,host_id,backend,viewport_width,viewport_height,vsync,scaling_mode,workload_id,workload_sha256,run_id,trial_id,requested_mode,effective_mode,editor_main_frame_us,frame_id,capture_id,errors,render_queue_wait_us,render_server_frame_us,gpu_frame_us,input_to_paint_us\n");
 			} else {
-				OS::get_singleton()->print("Could not open editor render-thread benchmark CSV.\\n");
+				OS::get_singleton()->print("Could not open editor render-thread benchmark CSV.\n");
 				editor_thread_benchmark_path.clear();
 			}
 		}
@@ -5303,7 +5303,7 @@ bool Main::iteration() {
 			const char *requested = OS::get_singleton()->is_separate_thread_rendering_enabled() ? "separate" : "safe";
 			const Size2i viewport = DisplayServer::get_singleton()->window_get_size();
 			const uint64_t frame_duration_us = OS::get_singleton()->get_ticks_usec() - ticks;
-			std::fprintf(editor_thread_benchmark_file, "%s,%s,%s,%d,%d,%d,%s,%s,%s,%llu,%d,%s,%s,%llu,%llu,%d,,%llu,,,\\n",
+			std::fprintf(editor_thread_benchmark_file, "%s,%s,%s,%d,%d,%d,%s,%s,%s,%llu,%d,%s,%s,%llu,%llu,%d,,%llu,,,\n",
 					GODOT_VERSION_HASH, editor_thread_benchmark_host.utf8().get_data(),
 					rendering_driver.utf8().get_data(), viewport.width, viewport.height,
 					int(window_vsync_mode), "default", editor_thread_benchmark_workload.utf8().get_data(),
