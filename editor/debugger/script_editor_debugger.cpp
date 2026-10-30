@@ -70,6 +70,7 @@
 #include "scene/gui/line_edit.h"
 #include "scene/gui/margin_container.h"
 #include "scene/gui/separator.h"
+#include "scene/gui/scroll_container.h"
 #include "scene/gui/split_container.h"
 #include "scene/gui/tab_container.h"
 #include "scene/gui/tree.h"
@@ -2936,8 +2937,14 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_tree->set_allow_rmb_select(true);
 		vmem_tree->connect("item_activated", callable_mp(this, &ScriptEditorDebugger::_vmem_item_activated));
 		vmem_tree->connect("item_mouse_selected", callable_mp(this, &ScriptEditorDebugger::_vmem_tree_rmb_selected));
+		ScrollContainer *native_scroll = memnew(ScrollContainer);
+		native_scroll->set_v_size_flags(SIZE_EXPAND_FILL);
+		vmem_vb->add_child(native_scroll);
+		VBoxContainer *native_details = memnew(VBoxContainer);
+		native_details->set_h_size_flags(SIZE_EXPAND_FILL);
+		native_scroll->add_child(native_details);
 		// Keep the original Video RAM resource list and controls intact.
-		vmem_vb->add_child(memnew(Label(TTRC("Native CPU allocations remaining after capture stop:"))));
+		native_details->add_child(memnew(Label(TTRC("Native CPU allocations remaining after capture stop:"))));
 		vmem_alloc_tree = memnew(Tree);
 		vmem_alloc_tree->set_columns(5);
 		vmem_alloc_tree->set_column_titles_visible(true);
@@ -2948,12 +2955,12 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_alloc_tree->set_column_title(4, TTRC("Generation"));
 		vmem_alloc_tree->set_hide_root(true);
 		vmem_alloc_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
-		vmem_vb->add_child(vmem_alloc_tree);
+		native_details->add_child(vmem_alloc_tree);
 		vmem_alloc_more = memnew(Button(TTRC("Load More Allocations")));
 		vmem_alloc_more->set_disabled(true);
-		vmem_vb->add_child(vmem_alloc_more);
+		native_details->add_child(vmem_alloc_more);
 		vmem_alloc_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_more));
-		vmem_vb->add_child(memnew(Label(TTRC("GPU backing allocations created during capture (not logical resource totals):"))));
+		native_details->add_child(memnew(Label(TTRC("GPU backing allocations created during capture (not logical resource totals):"))));
 		vmem_gpu_alloc_tree = memnew(Tree);
 		vmem_gpu_alloc_tree->set_columns(5);
 		vmem_gpu_alloc_tree->set_column_titles_visible(true);
@@ -2964,12 +2971,12 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_gpu_alloc_tree->set_column_title(4, TTRC("Generation"));
 		vmem_gpu_alloc_tree->set_hide_root(true);
 		vmem_gpu_alloc_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
-		vmem_vb->add_child(vmem_gpu_alloc_tree);
+		native_details->add_child(vmem_gpu_alloc_tree);
 		vmem_gpu_alloc_more = memnew(Button(TTRC("Load More GPU Allocations")));
 		vmem_gpu_alloc_more->set_disabled(true);
-		vmem_vb->add_child(vmem_gpu_alloc_more);
+		native_details->add_child(vmem_gpu_alloc_more);
 		vmem_gpu_alloc_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_gpu_more));
-		vmem_vb->add_child(memnew(Label(TTRC("Allocation/free timeline (bounded ring; lost events shown in capture status):"))));
+		native_details->add_child(memnew(Label(TTRC("Allocation/free timeline (bounded ring; lost events shown in capture status):"))));
 		vmem_event_tree = memnew(Tree);
 		vmem_event_tree->set_columns(7);
 		vmem_event_tree->set_column_titles_visible(true);
@@ -2982,11 +2989,11 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_event_tree->set_column_title(6, TTRC("Memory"));
 		vmem_event_tree->set_hide_root(true);
 		vmem_event_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
-		vmem_vb->add_child(vmem_event_tree);
+		native_details->add_child(vmem_event_tree);
 		vmem_event_more = memnew(Button(TTRC("Load Allocation Events")));
-		vmem_vb->add_child(vmem_event_more);
+		native_details->add_child(vmem_event_more);
 		vmem_event_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_event_more));
-		vmem_vb->add_child(memnew(Label(TTRC("Imported Capture Comparison (CPU/GPU backing bytes by category):"))));
+		native_details->add_child(memnew(Label(TTRC("Imported Capture Comparison (CPU/GPU backing bytes by category):"))));
 		HBoxContainer *compare_bar = memnew(HBoxContainer);
 		vmem_trace_pin = memnew(Button(TTRC("Pin Imported Baseline")));
 		vmem_trace_pin->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_trace_pin_baseline));
@@ -2994,7 +3001,7 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_trace_compare = memnew(Button(TTRC("Compare Imported Captures")));
 		vmem_trace_compare->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_trace_compare));
 		compare_bar->add_child(vmem_trace_compare);
-		vmem_vb->add_child(compare_bar);
+		native_details->add_child(compare_bar);
 		vmem_trace_diff_tree = memnew(Tree);
 		vmem_trace_diff_tree->set_columns(6);
 		vmem_trace_diff_tree->set_column_titles_visible(true);
@@ -3006,7 +3013,7 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_trace_diff_tree->set_column_title(5, TTRC("Allocation counts"));
 		vmem_trace_diff_tree->set_hide_root(true);
 		vmem_trace_diff_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
-		vmem_vb->add_child(vmem_trace_diff_tree);
+		native_details->add_child(vmem_trace_diff_tree);
 		tabs->add_child(vmem_vb);
 
 		vmem_item_menu = memnew(PopupMenu);
