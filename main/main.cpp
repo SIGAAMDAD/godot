@@ -5292,7 +5292,13 @@ bool Main::iteration() {
 #ifdef TOOLS_ENABLED
 	if (editor && !editor_thread_benchmark_path.is_empty()) {
 		if (!editor_thread_benchmark_file) {
+#if defined(_MSC_VER)
+			if (fopen_s(&editor_thread_benchmark_file, editor_thread_benchmark_path.utf8().get_data(), "wb") != 0) {
+				editor_thread_benchmark_file = nullptr;
+			}
+#else
 			editor_thread_benchmark_file = std::fopen(editor_thread_benchmark_path.utf8().get_data(), "wb");
+#endif
 			if (editor_thread_benchmark_file) {
 				editor_thread_benchmark_run_id = OS::get_singleton()->get_ticks_usec();
 				std::fprintf(editor_thread_benchmark_file, "run_id,trial_id,workload_id,workload_sha256,build_sha,host_id,backend,viewport_width,viewport_height,vsync,scaling_mode,requested_mode,effective_mode,capture_id,frame_id,timestamp_us,editor_main_frame_us,render_server_frame_us,render_queue_wait_us,gpu_frame_us,input_to_paint_us,editor_rss_bytes,gpu_reported_bytes,gpu_supported,errors\n");
@@ -5306,12 +5312,14 @@ bool Main::iteration() {
 			const char *effective = RenderingServer::get_singleton()->is_on_render_thread() ? "safe" : "separate";
 			const char *requested = OS::get_singleton()->is_separate_thread_rendering_enabled() ? "separate" : "safe";
 			const Size2i viewport = DisplayServer::get_singleton()->window_get_size();
+			const CharString build_sha = String(GODOT_VERSION_HASH).utf8();
+			const CharString backend = OS::get_singleton()->get_current_rendering_driver_name().utf8();
 			const uint64_t frame_duration_us = OS::get_singleton()->get_ticks_usec() - ticks;
 			const uint64_t timestamp_us = OS::get_singleton()->get_ticks_usec();
 			std::fprintf(editor_thread_benchmark_file, "%llu,%d,%s,%s,%s,%s,%s,%d,%d,%d,%s,%s,%s,%llu,%llu,%llu,%llu,%llu,%llu,,,,,0,\n",
 					(unsigned long long)editor_thread_benchmark_run_id, editor_thread_benchmark_trial_id,
 					editor_thread_benchmark_workload.utf8().get_data(), editor_thread_benchmark_workload_hash.utf8().get_data(),
-					GODOT_VERSION_HASH, editor_thread_benchmark_host.utf8().get_data(), rendering_driver.utf8().get_data(),
+					build_sha.get_data(), editor_thread_benchmark_host.utf8().get_data(), backend.get_data(),
 					viewport.width, viewport.height, int(window_vsync_mode), "default", requested, effective,
 					(unsigned long long)editor_thread_benchmark_run_id, (unsigned long long)editor_thread_benchmark_frames++,
 					(unsigned long long)timestamp_us, (unsigned long long)frame_duration_us,
@@ -5320,13 +5328,13 @@ bool Main::iteration() {
 		}
 	}
 #endif
-	#ifdef TOOLS_ENABLED
+#ifdef TOOLS_ENABLED
 	if (editor) {
 		Performance::get_singleton()->set_editor_frame_timings(
 				(OS::get_singleton()->get_ticks_usec() - ticks) / 1000000.0,
 				editor_render_sync_us / 1000000.0);
 	}
-	#endif
+#endif
 	if (fixed_fps != -1) {
 		return exit;
 	}

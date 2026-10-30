@@ -56,7 +56,6 @@ using namespace RendererSceneRenderImplementation;
 
 static_assert(sizeof(RID) == sizeof(uint64_t), "The Terrain3D bridge requires 64-bit RID handles.");
 
-
 static _FORCE_INLINE_ void _terrain3d_store_transform(const Transform3D &p_transform, float *r_values) {
 	r_values[0] = p_transform.basis.rows[0][0];
 	r_values[1] = p_transform.basis.rows[0][1];
@@ -86,7 +85,6 @@ static _FORCE_INLINE_ uint64_t _terrain3d_bridge_rid(RID p_rid) {
 	memcpy(&result, &p_rid, sizeof(result));
 	return result;
 }
-
 
 void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_specular() {
 	ERR_FAIL_NULL(render_buffers);
@@ -910,8 +908,8 @@ void RenderForwardClustered::_terrain3d_bridge_update_environment(const RenderDa
 
 	constexpr size_t environment_payload_offset = offsetof(t3dBridgeFrame, environment_flags);
 	const bool changed = memcmp(reinterpret_cast<const uint8_t *>(&updated_frame) + environment_payload_offset,
-			reinterpret_cast<const uint8_t *>(&terrain3d_bridge_frame) + environment_payload_offset,
-			sizeof(t3dBridgeFrame) - environment_payload_offset) != 0;
+								 reinterpret_cast<const uint8_t *>(&terrain3d_bridge_frame) + environment_payload_offset,
+								 sizeof(t3dBridgeFrame) - environment_payload_offset) != 0;
 	if (changed) {
 		terrain3d_bridge_frame_generation++;
 		if (terrain3d_bridge_frame_generation == 0) {
@@ -2195,7 +2193,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 #ifdef STREAMLINE_ENABLED
 		case RSE::VIEWPORT_SCALING_3D_MODE_DLSS:
 			scale_type = (dlss_effect != nullptr && dlss_effect->is_supported() && rb_data.is_valid() &&
-					rb_data->ensure_dlss(dlss_effect, rb->get_view_count())) ? SCALE_DLSS : SCALE_FSR2;
+								 rb_data->ensure_dlss(dlss_effect, rb->get_view_count()))
+					? SCALE_DLSS
+					: SCALE_FSR2;
 			break;
 #endif
 #ifdef XESS_ENABLED
@@ -2203,7 +2203,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			// Establish all per-eye contexts before recording any vendor pass. If
 			// creation or prior native execution failed, use unchanged upstream FSR2.
 			scale_type = (xess_effect != nullptr && xess_effect->is_supported() && rb_data.is_valid() &&
-					rb_data->ensure_xess(xess_effect, rb->get_view_count())) ? SCALE_XESS : SCALE_FSR2;
+								 rb_data->ensure_xess(xess_effect, rb->get_view_count()))
+					? SCALE_XESS
+					: SCALE_FSR2;
 			break;
 #endif
 		case RSE::VIEWPORT_SCALING_3D_MODE_METALFX_TEMPORAL:
@@ -3461,7 +3463,6 @@ void RenderForwardClustered::_render_shadow_append(RID p_framebuffer, const Page
 			_terrain3d_store_projection((correction * p_projection) * Projection(p_transform.affine_inverse()), bridge_shadow.view_projection);
 			_terrain3d_store_transform(p_transform, bridge_shadow.camera_transform);
 		}
-
 
 		scene_state.shadow_passes.push_back(shadow_pass);
 	}
