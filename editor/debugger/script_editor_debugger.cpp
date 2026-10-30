@@ -277,9 +277,9 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 			}
 			// Export loaded pages only, not a complete process heap dump.
 			file->store_string("Memory capture (loaded pages only),ID," + itos(vmem_capture_id) + "\n");
-			Tree *tables[] = { vmem_alloc_tree, vmem_gpu_alloc_tree, vmem_event_tree };
-			const char *labels[] = { "CPU allocations", "GPU backing allocations", "Allocation event timeline" };
-			for (int table_index = 0; table_index < 3; ++table_index) {
+			Tree *tables[] = { vmem_alloc_tree, vmem_gpu_alloc_tree, vmem_logical_alloc_tree, vmem_event_tree };
+			const char *labels[] = { "CPU allocations", "GPU backing allocations", "GPU logical RID allocations", "Allocation event timeline" };
+			for (int table_index = 0; table_index < 4; ++table_index) {
 				Tree *table = tables[table_index];
 				file->store_string(String(labels[table_index]) + "\n");
 				Vector<String> headers;
