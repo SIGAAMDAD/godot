@@ -31,6 +31,8 @@ enum AllocationCategory : uint32_t {
 	CATEGORY_VULKAN_TEXTURE = 101,
 	CATEGORY_D3D12_BUFFER = 110,
 	CATEGORY_D3D12_TEXTURE = 111,
+	CATEGORY_RD_LOGICAL_BUFFER = 200,
+	CATEGORY_RD_LOGICAL_TEXTURE = 201,
 };
 
 enum class RecordKind : uint8_t { ALLOC, FREE, REALLOC };
@@ -65,6 +67,9 @@ struct Summary {
 	uint64_t gpu_allocation_bytes = 0;
 	uint64_t gpu_peak_bytes = 0;
 	uint64_t gpu_live_allocations = 0;
+	uint64_t gpu_logical_bytes = 0;
+	uint64_t gpu_logical_peak_bytes = 0;
+	uint64_t gpu_logical_allocations = 0;
 	bool active = false;
 	bool incomplete = false;
 };
@@ -88,12 +93,15 @@ size_t events(uint64_t p_first, Event *r_events, size_t p_capacity);
 // Physical allocator suballocations (VMA/D3D12MA), distinct from logical RIDs.
 void record_gpu_alloc(void *p_allocation, size_t p_bytes);
 void record_gpu_free(void *p_allocation);
+void record_gpu_logical_alloc(void *p_rid, size_t p_bytes);
+void record_gpu_logical_free(void *p_rid);
 
 void record_alloc(void *p_ptr, size_t p_bytes);
 void record_free(void *p_ptr);
 void record_realloc(void *p_old_ptr, void *p_new_ptr, size_t p_bytes, bool p_success);
 
 size_t gpu_live_records(size_t p_offset, Record *r_records, size_t p_capacity);
+size_t gpu_logical_live_records(size_t p_offset, Record *r_records, size_t p_capacity);
 
 uint32_t category();
 void set_category(uint32_t p_category);
