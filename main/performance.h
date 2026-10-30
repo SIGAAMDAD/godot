@@ -59,6 +59,8 @@ class Performance : public Object {
 	double _process_time;
 	double _physics_process_time;
 	double _navigation_process_time;
+	double _editor_main_frame_time = 0.0;
+	double _editor_render_sync_time = 0.0;
 
 public:
 	enum Monitor {
@@ -153,6 +155,9 @@ public:
 	void set_process_time(double p_pt);
 	void set_physics_process_time(double p_pt);
 	void set_navigation_process_time(double p_pt);
+	void set_editor_frame_timings(double p_main_seconds, double p_render_sync_seconds);
+	double get_editor_main_frame_time() const { return _editor_main_frame_time; }
+	double get_editor_render_sync_time() const { return _editor_render_sync_time; }
 
 	void add_custom_monitor(const StringName &p_id, const Callable &p_callable, const Vector<Variant> &p_args, MonitorType p_type = MONITOR_TYPE_QUANTITY);
 	void remove_custom_monitor(const StringName &p_id);
