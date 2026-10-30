@@ -111,6 +111,8 @@ private:
 		SAVE_MONITORS_CSV,
 		SAVE_VRAM_CSV,
 		SAVE_MEMORY_CAPTURE_CSV,
+		SAVE_MEMORY_CAPTURE_TRACE,
+		OPEN_MEMORY_CAPTURE_TRACE,
 	};
 	FileDialogPurpose file_dialog_purpose = SAVE_MONITORS_CSV;
 
@@ -156,6 +158,11 @@ private:
 	Tree *vmem_event_tree = nullptr;
 	Button *vmem_event_more = nullptr;
 	Button *vmem_capture_export = nullptr;
+	Button *vmem_trace_export = nullptr;
+	Button *vmem_trace_import = nullptr;
+	PackedByteArray vmem_trace_payload;
+	String vmem_trace_export_path;
+	int64_t vmem_trace_requested_capture = 0;
 	int64_t vmem_capture_id = 0;
 	int64_t vmem_alloc_next_offset = 0;
 	TextureRect *vmem_notice_icon = nullptr;
@@ -237,6 +244,8 @@ private:
 	void _msg_servers_memprof_records(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_gpu_records(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_events(uint64_t p_thread_id, const Array &p_data);
+	void _msg_servers_memprof_trace_chunk(uint64_t p_thread_id, const Array &p_data);
+	void _msg_servers_memprof_trace_error(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_drawn(uint64_t p_thread_id, const Array &p_data);
 	void _msg_stack_dump(uint64_t p_thread_id, const Array &p_data);
 	void _msg_stack_frame_vars(uint64_t p_thread_id, const Array &p_data);
@@ -276,6 +285,8 @@ private:
 	void _video_mem_capture_gpu_more();
 	void _video_mem_capture_event_more();
 	void _video_mem_capture_export();
+	void _video_mem_trace_export();
+	void _video_mem_trace_import();
 	void _video_mem_export();
 
 	void _resources_reimported(const PackedStringArray &p_resources);
