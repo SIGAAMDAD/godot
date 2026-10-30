@@ -852,7 +852,7 @@ void ScriptEditorDebugger::_msg_servers_memory_usage(uint64_t p_thread_id, const
 }
 
 void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, const Array &p_data) {
-	if (p_data.size() != 17) {
+	if (p_data.size() != 21) {
 		return;
 	}
 	const int64_t id = p_data[0];
@@ -866,7 +866,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, con
 	vmem_capture_id = id;
 	vmem_native_recording = active;
 	_update_buttons_state();
-	vmem_capture_status->set_text(vformat("Capture %d: %s, CPU live %s (%d allocs), CPU peak %s; GPU allocated %s (%d allocations), GPU peak %s; GPU logical RID %s (%d allocs), peak %s%s",
+	vmem_capture_status->set_text(vformat("Capture %d: %s, CPU live %s (%d allocs), CPU peak %s; GPU backing %s (%d allocations), peak %s; GPU logical RID %s (%d allocs), peak %s; GPU allocator %s, reserved %s, budget %s%s",
 			id, active ? TTR("recording") : TTR("stopped"),
 			String::humanize_size(int64_t(p_data[2])), int64_t(p_data[4]),
 			String::humanize_size(int64_t(p_data[3])),
@@ -874,6 +874,9 @@ void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, con
 			String::humanize_size(int64_t(p_data[11])),
 			String::humanize_size(int64_t(p_data[14])), int64_t(p_data[16]),
 			String::humanize_size(int64_t(p_data[15])),
+			bool(p_data[20]) ? String::humanize_size(int64_t(p_data[17])) : TTR("N/A"),
+			bool(p_data[20]) ? String::humanize_size(int64_t(p_data[18])) : TTR("N/A"),
+			bool(p_data[20]) ? String::humanize_size(int64_t(p_data[19])) : TTR("N/A"),
 			incomplete ? TTR(" (incomplete trace)") : String()));
 	if (!active) {
 		vmem_alloc_next_offset = 0;
