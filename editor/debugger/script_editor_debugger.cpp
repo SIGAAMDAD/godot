@@ -541,22 +541,25 @@ void ScriptEditorDebugger::_msg_servers_memory_usage(uint64_t p_thread_id, const
 }
 
 void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, const Array &p_data) {
-	if (p_data.size() != 11) {
+	if (p_data.size() != 14) {
 		return;
 	}
 	const int64_t id = p_data[0];
 	const bool active = p_data[8];
 	const bool incomplete = p_data[9];
-	const bool success = p_data[10];
+	const bool success = p_data[13];
 	if (!success) {
 		vmem_capture_status->set_text(TTR("Capture rejected or already running"));
 		return;
 	}
 	vmem_capture_id = id;
-	vmem_capture_status->set_text(vformat("Capture %d: %s, live %s in %d allocations, peak %s%s",
+	vmem_capture_status->set_text(vformat("Capture %d: %s, CPU live %s (%d allocs), CPU peak %s; GPU allocated %s (%d allocations), GPU peak %s%s",
 			id, active ? TTR("recording") : TTR("stopped"),
 			String::humanize_size(int64_t(p_data[2])), int64_t(p_data[4]),
-			String::humanize_size(int64_t(p_data[3])), incomplete ? TTR(" (incomplete trace)") : String()));
+			String::humanize_size(int64_t(p_data[3])),
+			String::humanize_size(int64_t(p_data[10])), int64_t(p_data[12]),
+			String::humanize_size(int64_t(p_data[11])),
+			incomplete ? TTR(" (incomplete trace)") : String()));
 	if (!active) {
 		vmem_alloc_next_offset = 0;
 		vmem_alloc_tree->clear();
