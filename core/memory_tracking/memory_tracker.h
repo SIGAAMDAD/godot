@@ -55,6 +55,9 @@ struct Event {
 	RecordKind kind = RecordKind::ALLOC;
 	bool gpu = false;
 	uint32_t stack_id = 0;
+	uint64_t timestamp_us = 0;
+	uint64_t thread_id = 0;
+	uint64_t frame_id = 0;
 };
 
 struct Summary {
@@ -110,6 +113,8 @@ size_t callstack(uint32_t p_stack_id, uintptr_t *r_frames, size_t p_capacity);
 
 uint32_t category();
 void set_category(uint32_t p_category);
+// Called once per main frame; allocated events sample this published frame ID.
+void set_frame(uint64_t p_frame);
 
 class ScopeCategory {
 	uint32_t previous;
