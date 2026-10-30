@@ -858,7 +858,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_records(uint64_t p_thread_id, co
 	}
 	const int64_t offset = p_data[1];
 	const int64_t count = p_data[2];
-	if (offset != vmem_alloc_next_offset || count < 0 || count > 64 || p_data.size() != 3 + count * 5) {
+	if (offset != vmem_alloc_next_offset || count < 0 || count > 64 || p_data.size() != 3 + count * 6) {
 		return;
 	}
 	TreeItem *root = vmem_alloc_tree->get_root();
@@ -866,13 +866,15 @@ void ScriptEditorDebugger::_msg_servers_memprof_records(uint64_t p_thread_id, co
 		root = vmem_alloc_tree->create_item();
 	}
 	for (int64_t i = 0; i < count; i++) {
-		const int index = 3 + int(i) * 5;
+		const int index = 3 + int(i) * 6;
 		TreeItem *item = vmem_alloc_tree->create_item(root);
 		item->set_text(0, itos(int64_t(p_data[index])));
 		item->set_text(1, itos(int64_t(p_data[index + 1])));
 		item->set_text(2, String::humanize_size(int64_t(p_data[index + 2])));
 		item->set_text(3, itos(int64_t(p_data[index + 3])));
 		item->set_text(4, itos(int64_t(p_data[index + 4])));
+		item->set_text(5, itos(int64_t(p_data[index + 5])));
+		item->set_metadata(0, int64_t(p_data[index + 5]));
 	}
 	vmem_alloc_next_offset += count;
 	vmem_alloc_more->set_disabled(count < 64);
@@ -884,7 +886,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_gpu_records(uint64_t p_thread_id
 	}
 	const int64_t offset = p_data[1];
 	const int64_t count = p_data[2];
-	if (offset != vmem_gpu_alloc_next_offset || count < 0 || count > 64 || p_data.size() != 3 + count * 5) {
+	if (offset != vmem_gpu_alloc_next_offset || count < 0 || count > 64 || p_data.size() != 3 + count * 6) {
 		return;
 	}
 	TreeItem *root = vmem_gpu_alloc_tree->get_root();
@@ -892,13 +894,15 @@ void ScriptEditorDebugger::_msg_servers_memprof_gpu_records(uint64_t p_thread_id
 		root = vmem_gpu_alloc_tree->create_item();
 	}
 	for (int64_t i = 0; i < count; ++i) {
-		const int index = 3 + int(i) * 5;
+		const int index = 3 + int(i) * 6;
 		TreeItem *item = vmem_gpu_alloc_tree->create_item(root);
 		item->set_text(0, itos(int64_t(p_data[index])));
 		item->set_text(1, itos(int64_t(p_data[index + 1])));
 		item->set_text(2, String::humanize_size(int64_t(p_data[index + 2])));
 		item->set_text(3, itos(int64_t(p_data[index + 3])));
 		item->set_text(4, itos(int64_t(p_data[index + 4])));
+		item->set_text(5, itos(int64_t(p_data[index + 5])));
+		item->set_metadata(0, int64_t(p_data[index + 5]));
 	}
 	vmem_gpu_alloc_next_offset += count;
 	vmem_gpu_alloc_more->set_disabled(count < 64);
@@ -910,7 +914,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_gpu_logical_records(uint64_t p_t
 	}
 	const int64_t offset = p_data[1];
 	const int64_t count = p_data[2];
-	if (offset != vmem_logical_alloc_next_offset || count < 0 || count > 64 || p_data.size() != 3 + count * 5) {
+	if (offset != vmem_logical_alloc_next_offset || count < 0 || count > 64 || p_data.size() != 3 + count * 6) {
 		return;
 	}
 	TreeItem *root = vmem_logical_alloc_tree->get_root();
@@ -918,13 +922,15 @@ void ScriptEditorDebugger::_msg_servers_memprof_gpu_logical_records(uint64_t p_t
 		root = vmem_logical_alloc_tree->create_item();
 	}
 	for (int64_t i = 0; i < count; i++) {
-		const int index = 3 + int(i) * 5;
+		const int index = 3 + int(i) * 6;
 		TreeItem *item = vmem_logical_alloc_tree->create_item(root);
 		item->set_text(0, itos(int64_t(p_data[index])));
 		item->set_text(1, itos(int64_t(p_data[index + 1])));
 		item->set_text(2, String::humanize_size(int64_t(p_data[index + 2])));
 		item->set_text(3, itos(int64_t(p_data[index + 3])));
 		item->set_text(4, itos(int64_t(p_data[index + 4])));
+		item->set_text(5, itos(int64_t(p_data[index + 5])));
+		item->set_metadata(0, int64_t(p_data[index + 5]));
 	}
 	vmem_logical_alloc_next_offset += count;
 	vmem_logical_alloc_more->set_disabled(count < 64);
@@ -936,7 +942,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, con
 	}
 	const int64_t first = p_data[1];
 	const int64_t count = p_data[2];
-	if (first != int64_t(vmem_event_next_sequence) || count < 0 || count > 32 || p_data.size() != 3 + count * 7) {
+	if (first != int64_t(vmem_event_next_sequence) || count < 0 || count > 32 || p_data.size() != 3 + count * 8) {
 		return;
 	}
 	TreeItem *root = vmem_event_tree->get_root();
@@ -944,7 +950,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, con
 		root = vmem_event_tree->create_item();
 	}
 	for (int64_t i = 0; i < count; ++i) {
-		const int index = 3 + int(i) * 7;
+		const int index = 3 + int(i) * 8;
 		const uint64_t sequence = uint64_t(int64_t(p_data[index]));
 		TreeItem *item = vmem_event_tree->create_item(root);
 		item->set_text(0, itos(int64_t(sequence)));
@@ -955,10 +961,30 @@ void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, con
 		const int kind = p_data[index + 5];
 		item->set_text(5, kind == 0 ? TTR("Alloc") : kind == 1 ? TTR("Free") : TTR("Realloc"));
 		item->set_text(6, bool(p_data[index + 6]) ? TTR("GPU") : TTR("CPU"));
+		item->set_text(7, itos(int64_t(p_data[index + 7])));
+		item->set_metadata(0, int64_t(p_data[index + 7]));
 		vmem_event_next_sequence = sequence + 1;
 	}
 	// An empty page may simply mean no new events yet.
 	vmem_event_more->set_disabled(false);
+}
+
+void ScriptEditorDebugger::_msg_servers_memprof_stack(uint64_t p_thread_id, const Array &p_data) {
+	if (p_data.size() < 3 || int64_t(p_data[0]) != vmem_capture_id ||
+			int64_t(p_data[1]) != vmem_last_stack) {
+		return;
+	}
+	const int64_t count = p_data[2];
+	if (count < 0 || count > 12 || p_data.size() != 3 + count) {
+		return;
+	}
+	vmem_callstack_tree->clear();
+	TreeItem *root = vmem_callstack_tree->create_item();
+	for (int64_t i = 0; i < count; ++i) {
+		TreeItem *row = vmem_callstack_tree->create_item(root);
+		row->set_text(0, itos(i));
+		row->set_text(1, itos(int64_t(p_data[int(i) + 3])));
+	}
 }
 
 void ScriptEditorDebugger::_msg_servers_memprof_trace_chunk(uint64_t p_thread_id, const Array &p_data) {
@@ -1529,6 +1555,7 @@ void ScriptEditorDebugger::_init_parse_message_handlers() {
 	parse_message_handlers["servers:memprof_events"] = &ScriptEditorDebugger::_msg_servers_memprof_events;
 	parse_message_handlers["servers:memprof_trace_chunk"] = &ScriptEditorDebugger::_msg_servers_memprof_trace_chunk;
 	parse_message_handlers["servers:memprof_trace_error"] = &ScriptEditorDebugger::_msg_servers_memprof_trace_error;
+	parse_message_handlers["servers:memprof_stack"] = &ScriptEditorDebugger::_msg_servers_memprof_stack;
 	parse_message_handlers["servers:drawn"] = &ScriptEditorDebugger::_msg_servers_drawn;
 	parse_message_handlers["stack_dump"] = &ScriptEditorDebugger::_msg_stack_dump;
 	parse_message_handlers["stack_frame_vars"] = &ScriptEditorDebugger::_msg_stack_frame_vars;
