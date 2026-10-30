@@ -43,6 +43,7 @@ struct Record {
 	uint64_t bytes = 0;
 	uint32_t category = 0;
 	uint32_t generation = 0;
+	uint32_t stack_id = 0;
 };
 
 struct Event {
@@ -53,6 +54,7 @@ struct Event {
 	uint32_t category = 0;
 	RecordKind kind = RecordKind::ALLOC;
 	bool gpu = false;
+	uint32_t stack_id = 0;
 };
 
 struct Summary {
@@ -102,6 +104,9 @@ void record_realloc(void *p_old_ptr, void *p_new_ptr, size_t p_bytes, bool p_suc
 
 size_t gpu_live_records(size_t p_offset, Record *r_records, size_t p_capacity);
 size_t gpu_logical_live_records(size_t p_offset, Record *r_records, size_t p_capacity);
+// Returns the bounded raw program-counter sample for an allocation stack ID.
+// Only debugger requests should expose these addresses; traces omit them.
+size_t callstack(uint32_t p_stack_id, uintptr_t *r_frames, size_t p_capacity);
 
 uint32_t category();
 void set_category(uint32_t p_category);
