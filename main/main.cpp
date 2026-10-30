@@ -5185,7 +5185,7 @@ bool Main::iteration() {
 
 	GodotProfileZoneGrouped(_profile_zone, "RenderingServer::sync");
 #ifdef TOOLS_ENABLED
-	const uint64_t editor_render_sync_begin = editor_thread_benchmark_path.is_empty() ? 0 : OS::get_singleton()->get_ticks_usec();
+	const uint64_t editor_render_sync_begin = editor ? OS::get_singleton()->get_ticks_usec() : 0;
 #endif
 	RenderingServer::get_singleton()->sync(); //sync if still drawing from previous frames.
 #ifdef TOOLS_ENABLED
@@ -5317,6 +5317,13 @@ bool Main::iteration() {
 		}
 	}
 #endif
+	#ifdef TOOLS_ENABLED
+	if (editor) {
+		Performance::get_singleton()->set_editor_frame_timings(
+				(OS::get_singleton()->get_ticks_usec() - ticks) / 1000000.0,
+				editor_render_sync_us / 1000000.0);
+	}
+	#endif
 	if (fixed_fps != -1) {
 		return exit;
 	}
