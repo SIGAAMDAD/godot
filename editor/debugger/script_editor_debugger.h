@@ -143,6 +143,13 @@ private:
 	Button *vmem_refresh = nullptr;
 	Button *vmem_export = nullptr;
 	LineEdit *vmem_total = nullptr;
+	Button *vmem_capture = nullptr;
+	Button *vmem_capture_stop = nullptr;
+	Button *vmem_alloc_more = nullptr;
+	LineEdit *vmem_capture_status = nullptr;
+	Tree *vmem_alloc_tree = nullptr;
+	int64_t vmem_capture_id = 0;
+	int64_t vmem_alloc_next_offset = 0;
 	TextureRect *vmem_notice_icon = nullptr;
 	PopupMenu *vmem_item_menu = nullptr;
 
@@ -218,6 +225,8 @@ private:
 #endif // DISABLE_DEPRECATED
 	void _msg_scene_debug_mute_audio(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memory_usage(uint64_t p_thread_id, const Array &p_data);
+	void _msg_servers_memprof_status(uint64_t p_thread_id, const Array &p_data);
+	void _msg_servers_memprof_records(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_drawn(uint64_t p_thread_id, const Array &p_data);
 	void _msg_stack_dump(uint64_t p_thread_id, const Array &p_data);
 	void _msg_stack_frame_vars(uint64_t p_thread_id, const Array &p_data);
@@ -251,6 +260,9 @@ private:
 	void _remote_object_property_updated(ObjectID p_id, const String &p_property);
 
 	void _video_mem_request();
+	void _video_mem_capture_start();
+	void _video_mem_capture_stop();
+	void _video_mem_capture_more();
 	void _video_mem_export();
 
 	void _resources_reimported(const PackedStringArray &p_resources);
