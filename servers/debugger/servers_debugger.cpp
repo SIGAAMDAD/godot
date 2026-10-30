@@ -420,7 +420,8 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 				int64_t(s.capture_id), int64_t(s.sequence), int64_t(s.live_bytes), int64_t(s.peak_bytes),
 				int64_t(s.live_allocations), int64_t(s.total_allocations), int64_t(s.dropped_records),
 				int64_t(s.overwritten_events), s.active, s.incomplete, int64_t(s.gpu_allocation_bytes), int64_t(s.gpu_peak_bytes), int64_t(s.gpu_live_allocations), true });
-	} else if (p_cmd == "memprof_records") {
+	} else if (p_cmd == "memprof_records" || p_cmd == "memprof_gpu_records") {
+		const bool gpu_records = p_cmd == "memprof_gpu_records";
 		// Serialize at most one small page per response, never per-allocation messages.
 		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
 			return ERR_INVALID_PARAMETER;
@@ -432,7 +433,7 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			return ERR_INVALID_PARAMETER;
 		}
 		GodotMemoryTracking::Record records[64];
-		const size_t count = GodotMemoryTracking::live_records((size_t)offset, records, 64);
+		const size_t count = gpu_records ? GodotMemoryTracking::gpu_live_records((size_t)offset, records, 64) : GodotMemoryTracking::live_records((size_t)offset, records, 64);
 		Array result = { int64_t(s.capture_id), offset, int64_t(count) };
 		for (size_t i = 0; i < count; i++) {
 			result.push_back(int64_t(records[i].allocation_id));
@@ -441,7 +442,7 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			result.push_back(int64_t(records[i].category));
 			result.push_back(int64_t(records[i].generation));
 		}
-		EngineDebugger::get_singleton()->send_message("servers:memprof_records", result);
+		EngineDebugger::get_singleton()->send_message(gpu_records ? "servers:memprof_gpu_records" : "servers:memprof_records", result);
 	} else if (p_cmd == "draw") { // Forced redraw.
 		// For camera override to stay live when the game is paused from the editor.
 		double delta = 0.0;
