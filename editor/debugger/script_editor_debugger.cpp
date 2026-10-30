@@ -660,6 +660,28 @@ void ScriptEditorDebugger::_video_mem_trace_import() {
 	file_dialog->popup_file_dialog();
 }
 
+void ScriptEditorDebugger::_video_mem_filter_changed(const String &p_filter) {
+	const String needle = p_filter.strip_edges().to_lower();
+	Tree *tables[] = { vmem_alloc_tree, vmem_gpu_alloc_tree, vmem_logical_alloc_tree, vmem_event_tree };
+	for (Tree *tree : tables) {
+		if (!tree || !tree->get_root()) {
+			continue;
+		}
+		for (TreeItem *row = tree->get_root()->get_first_child(); row; row = row->get_next()) {
+			bool visible = needle.is_empty();
+			if (!visible) {
+				for (int column = 0; column < tree->get_columns(); ++column) {
+					if (row->get_text(column).to_lower().contains(needle)) {
+						visible = true;
+						break;
+					}
+				}
+			}
+			row->set_visible(visible);
+		}
+	}
+}
+
 void ScriptEditorDebugger::_video_mem_capture_export() {
 	file_dialog->set_file_mode(EditorFileDialog::FILE_MODE_SAVE_FILE);
 	file_dialog->set_access(EditorFileDialog::ACCESS_FILESYSTEM);
@@ -3058,6 +3080,13 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_trace_import = memnew(Button(TTRC("Open Native Trace")));
 		vmem_trace_import->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_trace_import));
 		capture_bar->add_child(vmem_trace_import);
+		vmem_capture_filter = memnew(LineEdit);
+		vmem_capture_filter->set_placeholder(TTRC("Filter loaded allocation/event rows"));
+		vmem_capture_filter->set_accessibility_name(TTRC("Filter native memory records"));
+		vmem_capture_filter->set_h_size_flags(SIZE_EXPAND_FILL);
+		vmem_capture_filter->set_custom_minimum_size(Size2(120 * EDSCALE, 0));
+		vmem_capture_filter->connect(SceneStringName(text_changed), callable_mp(this, &ScriptEditorDebugger::_video_mem_filter_changed));
+		capture_bar->add_child(vmem_capture_filter);
 		vmem_capture_status = memnew(LineEdit);
 		vmem_capture_status->set_editable(false);
 		vmem_capture_status->set_h_size_flags(SIZE_EXPAND_FILL);
