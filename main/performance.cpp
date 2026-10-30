@@ -151,6 +151,9 @@ void Performance::_bind_methods() {
 	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_GPU_BACKING_PEAK);
 	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_GPU_LOGICAL_LIVE);
 	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_GPU_LOGICAL_PEAK);
+	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_GPU_DRIVER_ALLOCATED);
+	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_GPU_RESERVED);
+	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_GPU_BUDGET);
 	BIND_ENUM_CONSTANT(MEMORY_CAPTURE_EVENT_DROPS);
 	BIND_ENUM_CONSTANT(MONITOR_MAX);
 
@@ -256,6 +259,9 @@ String Performance::get_monitor_name(Monitor p_monitor) const {
 		PNAME("video/capture_gpu_backing_peak"),
 		PNAME("video/capture_gpu_logical_live"),
 		PNAME("video/capture_gpu_logical_peak"),
+		PNAME("video/capture_gpu_driver_allocated"),
+		PNAME("video/capture_gpu_reserved"),
+		PNAME("video/capture_gpu_budget"),
 		PNAME("memory/capture_event_drops"),
 	};
 	static_assert(std_size(names) == MONITOR_MAX);
@@ -287,6 +293,12 @@ double Performance::get_monitor(Monitor p_monitor) const {
 			return GodotMemoryTracking::summary().gpu_logical_bytes;
 		case MEMORY_CAPTURE_GPU_LOGICAL_PEAK:
 			return GodotMemoryTracking::summary().gpu_logical_peak_bytes;
+		case MEMORY_CAPTURE_GPU_DRIVER_ALLOCATED:
+			return GodotMemoryTracking::summary().gpu_driver_allocated_bytes;
+		case MEMORY_CAPTURE_GPU_RESERVED:
+			return GodotMemoryTracking::summary().gpu_reserved_bytes;
+		case MEMORY_CAPTURE_GPU_BUDGET:
+			return GodotMemoryTracking::summary().gpu_budget_bytes;
 		case MEMORY_CAPTURE_EVENT_DROPS: {
 			const GodotMemoryTracking::Summary tracked = GodotMemoryTracking::summary();
 			return tracked.dropped_records + tracked.overwritten_events;
@@ -578,6 +590,9 @@ Performance::MonitorType Performance::get_monitor_type(Monitor p_monitor) const 
 #ifdef MODULE_TEXTURE_STREAMING_ENABLED
 		MONITOR_TYPE_MEMORY,
 #endif // MODULE_TEXTURE_STREAMING_ENABLED
+		MONITOR_TYPE_MEMORY,
+		MONITOR_TYPE_MEMORY,
+		MONITOR_TYPE_MEMORY,
 		MONITOR_TYPE_MEMORY,
 		MONITOR_TYPE_MEMORY,
 		MONITOR_TYPE_MEMORY,
