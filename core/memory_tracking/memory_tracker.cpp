@@ -53,12 +53,17 @@ struct State {
 	std::mutex lifecycle_mutex;
 	std::mutex event_mutex;
 	Shard shards[SHARD_COUNT];
+	Shard gpu_shards[SHARD_COUNT];
 	Event event_ring[EVENT_CAPACITY];
 	std::atomic<uint64_t> capture_id{ 0 };
 	std::atomic<uint64_t> sequence{ 0 };
 	std::atomic<uint64_t> live_bytes{ 0 };
 	std::atomic<uint64_t> peak_bytes{ 0 };
 	std::atomic<uint64_t> live_allocations{ 0 };
+	std::atomic<uint64_t> gpu_live_bytes{ 0 };
+	std::atomic<uint64_t> gpu_peak_bytes{ 0 };
+	std::atomic<uint64_t> gpu_live_allocations{ 0 };
+	std::atomic<uint64_t> gpu_total_allocations{ 0 };
 	std::atomic<uint64_t> total_allocations{ 0 };
 	std::atomic<uint64_t> dropped_records{ 0 };
 	std::atomic<uint64_t> overwritten_events{ 0 };
@@ -84,26 +89,24 @@ size_t slot_index(uintptr_t p_ptr) {
 	return (size_t)h & (RECORDS_PER_SHARD - 1);
 }
 
-void set_peak(State *p_state, uint64_t p_bytes) {
-	uint64_t old = p_state->peak_bytes.load(std::memory_order_relaxed);
-	while (old < p_bytes && !p_state->peak_bytes.compare_exchange_weak(old, p_bytes, std::memory_order_relaxed)) {
-	}
-}
-
-void write_event(State *p_state, RecordKind p_kind, const Slot &p_record) {
+void write_event(State *p_state, RecordKind p_kind, const Slot &p_record, bool p_gpu = false) {
 	const uint64_t seq = p_state->sequence.fetch_add(1, std::memory_order_relaxed) + 1;
 	std::lock_guard<std::mutex> guard(p_state->event_mutex);
-	p_state->event_ring[(seq - 1) % EVENT_CAPACITY] = { seq, p_record.allocation_id, p_record.address, p_record.bytes, p_record.category, p_kind };
+	p_state->event_ring[(seq - 1) % EVENT_CAPACITY] = { seq, p_record.allocation_id, p_record.address, p_record.bytes, p_record.category, p_kind, p_gpu };
 	if (seq > EVENT_CAPACITY) {
 		p_state->overwritten_events.fetch_add(1, std::memory_order_relaxed);
 	}
 }
 
-void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind p_kind) {
+void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind p_kind, bool p_gpu = false) {
+	auto &live_bytes = p_gpu ? p_state->gpu_live_bytes : p_state->live_bytes;
+	auto &peak_bytes = p_gpu ? p_state->gpu_peak_bytes : p_state->peak_bytes;
+	auto &live_allocations = p_gpu ? p_state->gpu_live_allocations : p_state->live_allocations;
+	auto &total_allocations = p_gpu ? p_state->gpu_total_allocations : p_state->total_allocations;
 	if (p_address <= TOMBSTONE) {
 		return;
 	}
-	Shard &shard = p_state->shards[shard_index(p_address)];
+	Shard &shard = (p_gpu ? p_state->gpu_shards : p_state->shards)[shard_index(p_address)];
 	Slot added;
 	bool inserted = false;
 	{
@@ -115,7 +118,7 @@ void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind 
 			Slot &s = shard.slots[i];
 			if (s.address == p_address) {
 				// A duplicate address must never count as a second live allocation.
-				p_state->live_bytes.fetch_sub(s.bytes, std::memory_order_relaxed);
+				live_bytes.fetch_sub(s.bytes, std::memory_order_relaxed);
 				s.bytes = p_bytes;
 				s.category = active_category;
 				added = s;
@@ -138,28 +141,32 @@ void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind 
 			s.bytes = p_bytes;
 			s.category = active_category;
 			s.generation++;
-			s.allocation_id = p_state->total_allocations.fetch_add(1, std::memory_order_relaxed) + 1;
-			p_state->live_allocations.fetch_add(1, std::memory_order_relaxed);
+			s.allocation_id = total_allocations.fetch_add(1, std::memory_order_relaxed) + 1;
+			live_allocations.fetch_add(1, std::memory_order_relaxed);
 			added = s;
 			inserted = true;
 		}
 		if (inserted) {
-			const uint64_t live = p_state->live_bytes.fetch_add(p_bytes, std::memory_order_relaxed) + p_bytes;
-			set_peak(p_state, live);
+			const uint64_t live = live_bytes.fetch_add(p_bytes, std::memory_order_relaxed) + p_bytes;
+			uint64_t old_peak = peak_bytes.load(std::memory_order_relaxed);
+			while (old_peak < live && !peak_bytes.compare_exchange_weak(old_peak, live, std::memory_order_relaxed)) {
+			}
 		}
 	}
 	if (inserted) {
-		write_event(p_state, p_kind, added);
+		write_event(p_state, p_kind, added, p_gpu);
 	} else {
 		p_state->dropped_records.fetch_add(1, std::memory_order_relaxed);
 	}
 }
 
-void remove_record(State *p_state, uintptr_t p_address) {
+void remove_record(State *p_state, uintptr_t p_address, bool p_gpu = false) {
+	auto &live_bytes = p_gpu ? p_state->gpu_live_bytes : p_state->live_bytes;
+	auto &live_allocations = p_gpu ? p_state->gpu_live_allocations : p_state->live_allocations;
 	if (p_address <= TOMBSTONE) {
 		return;
 	}
-	Shard &shard = p_state->shards[shard_index(p_address)];
+	Shard &shard = (p_gpu ? p_state->gpu_shards : p_state->shards)[shard_index(p_address)];
 	Slot removed;
 	bool found = false;
 	{
@@ -173,15 +180,15 @@ void remove_record(State *p_state, uintptr_t p_address) {
 			if (s.address == p_address) {
 				removed = s;
 				s.address = TOMBSTONE;
-				p_state->live_bytes.fetch_sub(s.bytes, std::memory_order_relaxed);
-				p_state->live_allocations.fetch_sub(1, std::memory_order_relaxed);
+				live_bytes.fetch_sub(s.bytes, std::memory_order_relaxed);
+				live_allocations.fetch_sub(1, std::memory_order_relaxed);
 				found = true;
 				break;
 			}
 		}
 	}
 	if (found) {
-		write_event(p_state, RecordKind::FREE, removed);
+		write_event(p_state, RecordKind::FREE, removed, p_gpu);
 	}
 	// An allocation that predates capture is not a tracking error.
 }
@@ -218,6 +225,12 @@ bool start() {
 			s = Slot();
 		}
 	}
+	for (Shard &shard : p->gpu_shards) {
+		std::lock_guard<std::mutex> shard_guard(shard.mutex);
+		for (Slot &s : shard.slots) {
+			s = Slot();
+		}
+	}
 	{
 		std::lock_guard<std::mutex> event_guard(p->event_mutex);
 		for (Event &e : p->event_ring) {
@@ -228,6 +241,10 @@ bool start() {
 	p->live_bytes.store(0, std::memory_order_relaxed);
 	p->peak_bytes.store(0, std::memory_order_relaxed);
 	p->live_allocations.store(0, std::memory_order_relaxed);
+	p->gpu_live_bytes.store(0, std::memory_order_relaxed);
+	p->gpu_peak_bytes.store(0, std::memory_order_relaxed);
+	p->gpu_live_allocations.store(0, std::memory_order_relaxed);
+	p->gpu_total_allocations.store(0, std::memory_order_relaxed);
 	p->total_allocations.store(0, std::memory_order_relaxed);
 	p->dropped_records.store(0, std::memory_order_relaxed);
 	p->overwritten_events.store(0, std::memory_order_relaxed);
@@ -261,19 +278,22 @@ Summary summary() {
 	result.total_allocations = p->total_allocations.load(std::memory_order_relaxed);
 	result.dropped_records = p->dropped_records.load(std::memory_order_relaxed);
 	result.overwritten_events = p->overwritten_events.load(std::memory_order_relaxed);
+	result.gpu_allocation_bytes = p->gpu_live_bytes.load(std::memory_order_relaxed);
+	result.gpu_peak_bytes = p->gpu_peak_bytes.load(std::memory_order_relaxed);
+	result.gpu_live_allocations = p->gpu_live_allocations.load(std::memory_order_relaxed);
 	result.active = p->enabled.load(std::memory_order_acquire);
 	result.incomplete = result.dropped_records != 0 || result.overwritten_events != 0;
 	return result;
 }
 
-size_t live_records(size_t p_offset, Record *r_records, size_t p_capacity) {
+static size_t enumerate_records(size_t p_offset, Record *r_records, size_t p_capacity, bool p_gpu) {
 	State *p = state.load(std::memory_order_acquire);
 	if (!p || !r_records || !p_capacity || p->enabled.load(std::memory_order_acquire)) {
 		return 0;
 	}
 	size_t skipped = 0;
 	size_t count = 0;
-	for (Shard &shard : p->shards) {
+	for (Shard &shard : (p_gpu ? p->gpu_shards : p->shards)) {
 		std::lock_guard<std::mutex> guard(shard.mutex);
 		for (const Slot &s : shard.slots) {
 			if (s.address <= TOMBSTONE) {
@@ -289,6 +309,14 @@ size_t live_records(size_t p_offset, Record *r_records, size_t p_capacity) {
 		}
 	}
 	return count;
+}
+
+size_t live_records(size_t p_offset, Record *r_records, size_t p_capacity) {
+	return enumerate_records(p_offset, r_records, p_capacity, false);
+}
+
+size_t gpu_live_records(size_t p_offset, Record *r_records, size_t p_capacity) {
+	return enumerate_records(p_offset, r_records, p_capacity, true);
 }
 
 size_t events(uint64_t p_first, Event *r_events, size_t p_capacity) {
@@ -324,6 +352,22 @@ static State *enter_hook() {
 		return nullptr;
 	}
 	return p;
+}
+
+void record_gpu_alloc(void *p_allocation, size_t p_bytes) {
+	State *p = enter_hook();
+	if (p) {
+		add_record(p, (uintptr_t)p_allocation, p_bytes, RecordKind::ALLOC, true);
+		p->active_hooks.fetch_sub(1, std::memory_order_release);
+	}
+}
+
+void record_gpu_free(void *p_allocation) {
+	State *p = enter_hook();
+	if (p) {
+		remove_record(p, (uintptr_t)p_allocation, true);
+		p->active_hooks.fetch_sub(1, std::memory_order_release);
+	}
 }
 
 void record_alloc(void *p_ptr, size_t p_bytes) {

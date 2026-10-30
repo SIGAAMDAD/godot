@@ -42,6 +42,7 @@ struct Event {
 	uint64_t bytes = 0;
 	uint32_t category = 0;
 	RecordKind kind = RecordKind::ALLOC;
+	bool gpu = false;
 };
 
 struct Summary {
@@ -53,6 +54,9 @@ struct Summary {
 	uint64_t total_allocations = 0;
 	uint64_t dropped_records = 0;
 	uint64_t overwritten_events = 0;
+	uint64_t gpu_allocation_bytes = 0;
+	uint64_t gpu_peak_bytes = 0;
+	uint64_t gpu_live_allocations = 0;
 	bool active = false;
 	bool incomplete = false;
 };
@@ -73,9 +77,15 @@ size_t live_records(size_t p_offset, Record *r_records, size_t p_capacity);
 // Concurrent requests during capture are allowed but may see missing events.
 size_t events(uint64_t p_first, Event *r_events, size_t p_capacity);
 
+// Physical allocator suballocations (VMA/D3D12MA), distinct from logical RIDs.
+void record_gpu_alloc(void *p_allocation, size_t p_bytes);
+void record_gpu_free(void *p_allocation);
+
 void record_alloc(void *p_ptr, size_t p_bytes);
 void record_free(void *p_ptr);
 void record_realloc(void *p_old_ptr, void *p_new_ptr, size_t p_bytes, bool p_success);
+
+size_t gpu_live_records(size_t p_offset, Record *r_records, size_t p_capacity);
 
 uint32_t category();
 void set_category(uint32_t p_category);

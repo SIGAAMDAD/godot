@@ -22,6 +22,13 @@ int main() {
 	std::thread t([&] { record_free(b); });
 	t.join();
 	assert(summary().live_allocations == 0);
+	void *gpu = std::malloc(1);
+	record_gpu_alloc(gpu, 4096);
+	assert(summary().gpu_allocation_bytes == 4096);
+	assert(summary().gpu_live_allocations == 1);
+	record_gpu_free(gpu);
+	assert(summary().gpu_allocation_bytes == 0);
+	std::free(gpu);
 	std::free(b);
 	stop();
 	assert(!summary().active);
