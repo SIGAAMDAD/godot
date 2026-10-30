@@ -330,20 +330,23 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 			struct ImportedRows {
 				Vector<GodotMemoryTracking::Record> cpu;
 				Vector<GodotMemoryTracking::Record> gpu;
+				Vector<GodotMemoryTracking::Record> logical;
 				Vector<GodotMemoryTracking::Event> events;
 				GodotMemoryTracking::Summary summary;
 				bool summary_seen = false;
 			} imported;
 			GodotMemoryTracking::TraceVisitor visitor;
 			visitor.userdata = &imported;
-			visitor.on_record = [](const GodotMemoryTracking::Record &p_record, bool p_gpu, void *p_user) -> bool {
+			visitor.on_record = [](const GodotMemoryTracking::Record &p_record, uint8_t p_domain, void *p_user) -> bool {
 				ImportedRows *rows = static_cast<ImportedRows *>(p_user);
-				if (p_gpu) {
+				if (p_domain == 2) {
+					rows->logical.push_back(p_record);
+				} else if (p_domain == 1) {
 					rows->gpu.push_back(p_record);
 				} else {
 					rows->cpu.push_back(p_record);
 				}
-				return rows->cpu.size() <= 131072 && rows->gpu.size() <= 131072;
+				return rows->cpu.size() <= 131072 && rows->gpu.size() <= 131072 && rows->logical.size() <= 131072;
 			};
 			visitor.on_event = [](const GodotMemoryTracking::Event &p_event, void *p_user) -> bool {
 				ImportedRows *rows = static_cast<ImportedRows *>(p_user);
@@ -375,11 +378,18 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				vmem_trace_current_bytes[key] += int64_t(record.bytes);
 				vmem_trace_current_count[key] += 1;
 			}
+			for (const GodotMemoryTracking::Record &record : imported.logical) {
+				const uint64_t key = (uint64_t(2) << 32) | uint64_t(record.category);
+				vmem_trace_current_bytes[key] += int64_t(record.bytes);
+				vmem_trace_current_count[key] += 1;
+			}
 			vmem_alloc_tree->clear();
 			vmem_gpu_alloc_tree->clear();
+			vmem_logical_alloc_tree->clear();
 			vmem_event_tree->clear();
 			TreeItem *cpu_root = vmem_alloc_tree->create_item();
 			TreeItem *gpu_root = vmem_gpu_alloc_tree->create_item();
+			TreeItem *logical_root = vmem_logical_alloc_tree->create_item();
 			TreeItem *event_root = vmem_event_tree->create_item();
 			// Display is virtualized to bounded initial pages, while the codec
 			// validates and retains the complete stopped-capture trace.
@@ -401,6 +411,15 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 				row->set_text(3, itos(record.category));
 				row->set_text(4, itos(record.generation));
 			}
+			for (int i = 0; i < MIN(imported.logical.size(), 1024); ++i) {
+				const GodotMemoryTracking::Record &record = imported.logical[i];
+				TreeItem *row = vmem_logical_alloc_tree->create_item(logical_root);
+				row->set_text(0, itos(int64_t(record.allocation_id)));
+				row->set_text(1, TTR("Omitted from trace"));
+				row->set_text(2, String::humanize_size(record.bytes));
+				row->set_text(3, itos(record.category));
+				row->set_text(4, itos(record.generation));
+			}
 			for (int i = 0; i < MIN(imported.events.size(), 2048); ++i) {
 				const GodotMemoryTracking::Event &event = imported.events[i];
 				TreeItem *row = vmem_event_tree->create_item(event_root);
@@ -415,9 +434,10 @@ void ScriptEditorDebugger::_file_selected(const String &p_file) {
 			}
 			vmem_alloc_more->set_disabled(true);
 			vmem_gpu_alloc_more->set_disabled(true);
+			vmem_logical_alloc_more->set_disabled(true);
 			vmem_event_more->set_disabled(true);
-			vmem_capture_status->set_text(vformat("Imported capture %d: %d CPU, %d GPU, %d events%s",
-					vmem_capture_id, imported.cpu.size(), imported.gpu.size(), imported.events.size(),
+			vmem_capture_status->set_text(vformat("Imported capture %d: %d CPU, %d GPU backing, %d logical GPU, %d events%s",
+					vmem_capture_id, imported.cpu.size(), imported.gpu.size(), imported.logical.size(), imported.events.size(),
 					imported.summary.incomplete ? TTR(" (incomplete history)") : String()));
 		} break;
 	}
@@ -502,10 +522,12 @@ void ScriptEditorDebugger::_video_mem_capture_start() {
 	vmem_trace_current_count.clear();
 	vmem_alloc_next_offset = 0;
 	vmem_gpu_alloc_next_offset = 0;
+	vmem_logical_alloc_next_offset = 0;
 	vmem_event_next_sequence = 1;
 	vmem_alloc_tree->clear();
 	vmem_event_tree->clear();
 	vmem_gpu_alloc_tree->clear();
+	vmem_logical_alloc_tree->clear();
 	vmem_capture_status->set_text(TTR("Starting native allocation capture..."));
 	_put_msg("servers:memprof_start", Array());
 }
@@ -523,6 +545,12 @@ void ScriptEditorDebugger::_video_mem_capture_more() {
 void ScriptEditorDebugger::_video_mem_capture_gpu_more() {
 	if (vmem_capture_id != 0) {
 		_put_msg("servers:memprof_gpu_records", Array{ vmem_gpu_alloc_next_offset, vmem_capture_id });
+	}
+}
+
+void ScriptEditorDebugger::_video_mem_capture_logical_more() {
+	if (vmem_capture_id != 0) {
+		_put_msg("servers:memprof_gpu_logical_records", Array{ vmem_logical_alloc_next_offset, vmem_capture_id });
 	}
 }
 
@@ -566,7 +594,7 @@ void ScriptEditorDebugger::_video_mem_trace_compare() {
 		const int64_t previous_count = vmem_trace_baseline_count.has(p_key) ? vmem_trace_baseline_count[p_key] : 0;
 		const int64_t current_count = vmem_trace_current_count.has(p_key) ? vmem_trace_current_count[p_key] : 0;
 		TreeItem *item = vmem_trace_diff_tree->create_item(root);
-		item->set_text(0, (p_key >> 32) ? TTR("GPU backing") : TTR("Native CPU"));
+		item->set_text(0, (p_key >> 32) == 2 ? TTR("GPU logical") : (p_key >> 32) == 1 ? TTR("GPU backing") : TTR("Native CPU"));
 		item->set_text(1, itos(p_key & UINT32_MAX));
 		item->set_text(2, itos(previous));
 		item->set_text(3, itos(current));
@@ -787,7 +815,7 @@ void ScriptEditorDebugger::_msg_servers_memory_usage(uint64_t p_thread_id, const
 }
 
 void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, const Array &p_data) {
-	if (p_data.size() != 14) {
+	if (p_data.size() != 17) {
 		return;
 	}
 	const int64_t id = p_data[0];
@@ -799,22 +827,27 @@ void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, con
 		return;
 	}
 	vmem_capture_id = id;
-	vmem_capture_status->set_text(vformat("Capture %d: %s, CPU live %s (%d allocs), CPU peak %s; GPU allocated %s (%d allocations), GPU peak %s%s",
+	vmem_capture_status->set_text(vformat("Capture %d: %s, CPU live %s (%d allocs), CPU peak %s; GPU allocated %s (%d allocations), GPU peak %s; GPU logical RID %s (%d allocs), peak %s%s",
 			id, active ? TTR("recording") : TTR("stopped"),
 			String::humanize_size(int64_t(p_data[2])), int64_t(p_data[4]),
 			String::humanize_size(int64_t(p_data[3])),
 			String::humanize_size(int64_t(p_data[10])), int64_t(p_data[12]),
 			String::humanize_size(int64_t(p_data[11])),
+			String::humanize_size(int64_t(p_data[14])), int64_t(p_data[16]),
+			String::humanize_size(int64_t(p_data[15])),
 			incomplete ? TTR(" (incomplete trace)") : String()));
 	if (!active) {
 		vmem_alloc_next_offset = 0;
 		vmem_gpu_alloc_next_offset = 0;
+		vmem_logical_alloc_next_offset = 0;
 		vmem_event_next_sequence = 1;
 		vmem_alloc_tree->clear();
 		vmem_gpu_alloc_tree->clear();
+		vmem_logical_alloc_tree->clear();
 		vmem_event_tree->clear();
 		_video_mem_capture_more();
 		_video_mem_capture_gpu_more();
+		_video_mem_capture_logical_more();
 		_video_mem_capture_event_more();
 	}
 }
@@ -869,6 +902,32 @@ void ScriptEditorDebugger::_msg_servers_memprof_gpu_records(uint64_t p_thread_id
 	}
 	vmem_gpu_alloc_next_offset += count;
 	vmem_gpu_alloc_more->set_disabled(count < 64);
+}
+
+void ScriptEditorDebugger::_msg_servers_memprof_gpu_logical_records(uint64_t p_thread_id, const Array &p_data) {
+	if (p_data.size() < 3 || int64_t(p_data[0]) != vmem_capture_id) {
+		return;
+	}
+	const int64_t offset = p_data[1];
+	const int64_t count = p_data[2];
+	if (offset != vmem_logical_alloc_next_offset || count < 0 || count > 64 || p_data.size() != 3 + count * 5) {
+		return;
+	}
+	TreeItem *root = vmem_logical_alloc_tree->get_root();
+	if (!root) {
+		root = vmem_logical_alloc_tree->create_item();
+	}
+	for (int64_t i = 0; i < count; i++) {
+		const int index = 3 + int(i) * 5;
+		TreeItem *item = vmem_logical_alloc_tree->create_item(root);
+		item->set_text(0, itos(int64_t(p_data[index])));
+		item->set_text(1, itos(int64_t(p_data[index + 1])));
+		item->set_text(2, String::humanize_size(int64_t(p_data[index + 2])));
+		item->set_text(3, itos(int64_t(p_data[index + 3])));
+		item->set_text(4, itos(int64_t(p_data[index + 4])));
+	}
+	vmem_logical_alloc_next_offset += count;
+	vmem_logical_alloc_more->set_disabled(count < 64);
 }
 
 void ScriptEditorDebugger::_msg_servers_memprof_events(uint64_t p_thread_id, const Array &p_data) {
@@ -1466,6 +1525,7 @@ void ScriptEditorDebugger::_init_parse_message_handlers() {
 	parse_message_handlers["servers:memprof_status"] = &ScriptEditorDebugger::_msg_servers_memprof_status;
 	parse_message_handlers["servers:memprof_records"] = &ScriptEditorDebugger::_msg_servers_memprof_records;
 	parse_message_handlers["servers:memprof_gpu_records"] = &ScriptEditorDebugger::_msg_servers_memprof_gpu_records;
+	parse_message_handlers["servers:memprof_gpu_logical_records"] = &ScriptEditorDebugger::_msg_servers_memprof_gpu_logical_records;
 	parse_message_handlers["servers:memprof_events"] = &ScriptEditorDebugger::_msg_servers_memprof_events;
 	parse_message_handlers["servers:memprof_trace_chunk"] = &ScriptEditorDebugger::_msg_servers_memprof_trace_chunk;
 	parse_message_handlers["servers:memprof_trace_error"] = &ScriptEditorDebugger::_msg_servers_memprof_trace_error;
@@ -2976,6 +3036,23 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_gpu_alloc_more->set_disabled(true);
 		native_details->add_child(vmem_gpu_alloc_more);
 		vmem_gpu_alloc_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_gpu_more));
+		native_details->add_child(memnew(Label(TTRC("Logical GPU buffer/texture RIDs alive at stop (not physical backing bytes):"))));
+		vmem_logical_alloc_tree = memnew(Tree);
+		vmem_logical_alloc_tree->set_columns(5);
+		vmem_logical_alloc_tree->set_column_titles_visible(true);
+		vmem_logical_alloc_tree->set_column_title(0, TTRC("Allocation ID"));
+		vmem_logical_alloc_tree->set_column_title(1, TTRC("RID"));
+		vmem_logical_alloc_tree->set_column_title(2, TTRC("Size"));
+		vmem_logical_alloc_tree->set_column_title(3, TTRC("Category"));
+		vmem_logical_alloc_tree->set_column_title(4, TTRC("Generation"));
+		vmem_logical_alloc_tree->set_hide_root(true);
+		vmem_logical_alloc_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
+		native_details->add_child(vmem_logical_alloc_tree);
+		vmem_logical_alloc_more = memnew(Button(TTRC("Load More Logical GPU RIDs")));
+		vmem_logical_alloc_more->set_disabled(true);
+		vmem_logical_alloc_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_logical_more));
+		native_details->add_child(vmem_logical_alloc_more);
+
 		native_details->add_child(memnew(Label(TTRC("Allocation/free timeline (bounded ring; lost events shown in capture status):"))));
 		vmem_event_tree = memnew(Tree);
 		vmem_event_tree->set_columns(7);
