@@ -603,6 +603,11 @@ void Performance::set_navigation_process_time(double p_pt) {
 	_navigation_process_time = p_pt;
 }
 
+void Performance::set_editor_frame_timings(double p_main_seconds, double p_render_sync_seconds) {
+	_editor_main_frame_time = p_main_seconds;
+	_editor_render_sync_time = p_render_sync_seconds;
+}
+
 void Performance::add_custom_monitor(const StringName &p_id, const Callable &p_callable, const Vector<Variant> &p_args, MonitorType p_type) {
 	ERR_FAIL_COND_MSG(has_custom_monitor(p_id), "Custom monitor with id '" + String(p_id) + "' already exists.");
 	_monitor_map.insert(p_id, MonitorCall(p_type, p_callable, p_args));
