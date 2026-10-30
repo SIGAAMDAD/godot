@@ -529,6 +529,9 @@ void Main::print_help(const char *p_binary) {
 #else
 	print_help_option("--render-thread <mode>", "Render thread mode (\"unsafe\" [deprecated], \"safe\", \"separate\").\n");
 #endif // DISABLE_DEPRECATED
+#ifdef TOOLS_ENABLED
+	print_help_option("--editor-render-thread-experimental", "Allow an explicitly requested separate render thread in the Windows Vulkan editor (experimental).\\n");
+#endif
 #if defined(DEBUG_ENABLED) || defined(TOOLS_ENABLED)
 	print_help_option("--remote-fs <address>", "Remote filesystem (<host/IP>[:<port>] address).\n", CLI_OPTION_AVAILABILITY_TEMPLATE_DEBUG);
 	print_help_option("--remote-fs-password <password>", "Password for remote filesystem.\n", CLI_OPTION_AVAILABILITY_TEMPLATE_DEBUG);
@@ -1077,6 +1080,10 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 	String main_pack;
 	bool quiet_stdout = false;
 	int separate_thread_render = -1; // Tri-state: -1 = not set, 0 = false, 1 = true.
+#ifdef TOOLS_ENABLED
+	bool editor_render_thread_experimental = false;
+	bool render_thread_mode_explicit = false;
+#endif
 	bool clear_shader_cache = false;
 
 #if defined(DEBUG_ENABLED) || defined(TOOLS_ENABLED)
@@ -1533,6 +1540,9 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		} else if (arg == "--render-thread") { // render thread mode
 
 			if (N) {
+#ifdef TOOLS_ENABLED
+				render_thread_mode_explicit = true;
+#endif
 				if (N->get() == "safe") {
 					separate_thread_render = 0;
 #ifndef DISABLE_DEPRECATED
@@ -1558,6 +1568,8 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 				goto error;
 			}
 #ifdef TOOLS_ENABLED
+		} else if (arg == "--editor-render-thread-experimental") {
+			editor_render_thread_experimental = true;
 		} else if (arg == "-e" || arg == "--editor") { // starts editor
 
 			editor = true;
@@ -2787,10 +2799,31 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		separate_thread_render = (int)GLOBAL_DEF("rendering/driver/threads/thread_model", OS::RENDER_THREAD_SAFE) == OS::RENDER_SEPARATE_THREAD;
 	}
 
-	if (editor || project_manager) {
-		// Editor and project manager cannot run with rendering in a separate thread (they will crash on startup).
+	#ifdef TOOLS_ENABLED
+	if (editor_render_thread_experimental) {
+#if defined(WINDOWS_ENABLED) && defined(THREADS_ENABLED)
+		if (!editor || project_manager || recovery_mode || !render_thread_mode_explicit || separate_thread_render != 1 || rendering_driver != "vulkan") {
+			OS::get_singleton()->print("The experimental editor render thread requires --editor --render-thread separate on Windows/Vulkan without recovery mode. Aborting.\\n");
+			goto error;
+		}
+#else
+		OS::get_singleton()->print("Experimental editor render-thread mode requires a Windows build with threading. Aborting.\\n");
+		goto error;
+#endif
+	}
+	if ((editor || project_manager) && !editor_render_thread_experimental) {
+		// The editor and project manager default to rendering on the main thread.
 		separate_thread_render = 0;
 	}
+	if (editor) {
+		OS::get_singleton()->print("Editor render thread startup selection: %s (rendering driver: %s).\\n",
+				separate_thread_render == 1 ? "separate (experimental)" : "safe", rendering_driver.utf8().get_data());
+	}
+#else
+	if (editor || project_manager) {
+		separate_thread_render = 0;
+	}
+#endif
 #if !defined(THREADS_ENABLED)
 	separate_thread_render = 0;
 #endif
