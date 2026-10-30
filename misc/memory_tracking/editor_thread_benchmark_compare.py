@@ -14,10 +14,17 @@ def load(p,expected):
   if r['effective_mode']!=expected or r['requested_mode']!=expected:raise ValueError(f'{p}: invalid effective/requested mode {r["effective_mode"]}/{r["requested_mode"]}')
   if r['errors'].strip():raise ValueError(f'{p}: frame {r["frame_id"]} reports errors')
   if float(r['editor_main_frame_us'])<=0:raise ValueError(f'{p}: invalid frame duration')
+  if 'gpu_supported' in r and r['gpu_supported'] not in ('0','1'):raise ValueError(f'{p}: invalid GPU measurement availability')
+  if r.get('gpu_supported')=='0' and r.get('gpu_frame_us') not in ('',None):raise ValueError(f'{p}: unsupported GPU duration must be empty')
+  if 'timestamp_us' in r and (not r['timestamp_us'] or int(r['timestamp_us'])<=0):raise ValueError(f'{p}: invalid editor timestamp')
+  if r.get('render_queue_wait_us') not in ('',None) and float(r['render_queue_wait_us'])<0:raise ValueError(f'{p}: negative render queue wait')
   k=(r['run_id'],r['trial_id'],r['capture_id']);trials.setdefault(k,[]).append(r)
  for t,rr in trials.items():
   seq=[int(x['frame_id']) for x in rr]
   if len(seq)!=len(set(seq)) or seq!=sorted(seq):raise ValueError(f'{p}: duplicate/out-of-order frame in trial {t}')
+  if 'timestamp_us' in rr[0]:
+   times=[int(x['timestamp_us']) for x in rr]
+   if times!=sorted(times) or len(times)!=len(set(times)):raise ValueError(f'{p}: duplicate/out-of-order timestamps in trial {t}')
  return rows,trials
 def pctl(a,q):
  s=sorted(a);j=(len(s)-1)*q;lo=int(j);hi=math.ceil(j);return s[lo]+(s[hi]-s[lo])*(j-lo)
