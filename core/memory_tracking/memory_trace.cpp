@@ -29,7 +29,8 @@ constexpr size_t MAX_TRACE_BYTES = 32 * 1024 * 1024;
 constexpr size_t MAX_CHUNK_BYTES = 4 * 1024 * 1024;
 constexpr size_t HEADER_SIZE = 52;
 constexpr size_t CHUNK_HEADER_SIZE = 24;
-constexpr size_t ROW_SIZE = 40;
+constexpr size_t EVENT_ROW_SIZE = 64;
+constexpr size_t RECORD_ROW_SIZE = 40;
 constexpr size_t FOOTER_SIZE = 100;
 constexpr uint64_t HASH_BASIS = UINT64_C(14695981039346656037);
 constexpr uint64_t HASH_PRIME = UINT64_C(1099511628211);
@@ -125,7 +126,10 @@ void write_event(uint8_t *p_dst, const Event &p_event) {
 	p_dst[28] = uint8_t(p_event.kind);
 	p_dst[29] = p_event.gpu ? 1 : 0;
 	put32(p_dst + 30, p_event.stack_id);
-	std::memset(p_dst + 34, 0, 6);
+	put64(p_dst + 34, p_event.timestamp_us);
+	put64(p_dst + 42, p_event.thread_id);
+	put64(p_dst + 50, p_event.frame_id);
+	std::memset(p_dst + 58, 0, 6);
 }
 void write_record(uint8_t *p_dst, const Record &p_record, uint8_t p_domain) {
 	put64(p_dst, p_record.allocation_id);
@@ -149,7 +153,7 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 	uint8_t header[HEADER_SIZE] = {};
 	std::memcpy(header, "GDMEM001", 8);
 	put16(header + 8, 1);
-	put16(header + 10, 1); // v1.1 carries stack attribution IDs
+	put16(header + 10, 2); // v1.2 carries callstack, frame and monotonic time attribution
 	put64(header + 24, begin.capture_id);
 	put64(header + 32, 1000000); // microsecond tick frequency
 	put32(header + 48, crc32(header, 48));
@@ -157,7 +161,7 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 		return false;
 	}
 
-	uint8_t payload[ROW_SIZE * 64];
+	uint8_t payload[EVENT_ROW_SIZE * 64];
 	Event page[64];
 	uint64_t next = 1;
 	while (true) {
@@ -166,9 +170,9 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 			break;
 		}
 		for (size_t i = 0; i < count; ++i) {
-			write_event(payload + ROW_SIZE * i, page[i]);
+			write_event(payload + EVENT_ROW_SIZE * i, page[i]);
 		}
-		if (!writer.chunk(1, page[0].sequence, uint32_t(count), payload, uint32_t(ROW_SIZE * count))) {
+		if (!writer.chunk(1, page[0].sequence, uint32_t(count), payload, uint32_t(EVENT_ROW_SIZE * count))) {
 			return false;
 		}
 		next = page[count - 1].sequence + 1;
@@ -186,9 +190,9 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 				break;
 			}
 			for (size_t i = 0; i < count; ++i) {
-				write_record(payload + ROW_SIZE * i, records[i], uint8_t(gpu));
+				write_record(payload + RECORD_ROW_SIZE * i, records[i], uint8_t(gpu));
 			}
-			if (!writer.chunk(8, uint64_t(offset), uint32_t(count), payload, uint32_t(ROW_SIZE * count))) {
+			if (!writer.chunk(8, uint64_t(offset), uint32_t(count), payload, uint32_t(RECORD_ROW_SIZE * count))) {
 				return false;
 			}
 			offset += count;
@@ -224,7 +228,7 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_visitor) {
 	if (!p_bytes || p_size < HEADER_SIZE + CHUNK_HEADER_SIZE + FOOTER_SIZE || p_size > MAX_TRACE_BYTES ||
 			std::memcmp(p_bytes, "GDMEM001", 8) != 0 || get16(p_bytes + 8) != 1 ||
-			get16(p_bytes + 10) != 1 || get32(p_bytes + 12) != 0 ||
+			get16(p_bytes + 10) != 2 || get32(p_bytes + 12) != 0 ||
 			get32(p_bytes + 48) != crc32(p_bytes, 48)) {
 		return false;
 	}
@@ -249,11 +253,12 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 			return false;
 		}
 		if (type == 1 || type == 8) {
-			if (count != len / ROW_SIZE || len % ROW_SIZE != 0) {
+			const size_t row_size = type == 1 ? EVENT_ROW_SIZE : RECORD_ROW_SIZE;
+			if (count != len / row_size || len % row_size != 0) {
 				return false;
 			}
 			for (size_t i = 0; i < count; ++i) {
-				const uint8_t *row = data + i * ROW_SIZE;
+				const uint8_t *row = data + i * row_size;
 				if (type == 1) {
 					Event event;
 					event.sequence = get64(row);
@@ -266,6 +271,9 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 					event.kind = RecordKind(row[28]);
 					event.gpu = row[29] != 0;
 					event.stack_id = get32(row + 30);
+					event.timestamp_us = get64(row + 34);
+					event.thread_id = get64(row + 42);
+					event.frame_id = get64(row + 50);
 					last_seq = event.sequence;
 					if (p_visitor.on_event && !p_visitor.on_event(event, p_visitor.userdata)) {
 						return false;
