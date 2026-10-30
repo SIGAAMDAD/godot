@@ -35,6 +35,7 @@
 #include "core/debugger/engine_debugger.h"
 #include "core/debugger/engine_profiler.h"
 #include "core/io/resource_loader.h"
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/object/script_language.h"
 #include "core/os/os.h"
 #include "servers/display/display_server.h"
@@ -403,6 +404,44 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 	r_captured = true;
 	if (p_cmd == "memory") {
 		singleton->_send_resource_usage();
+	} else if (p_cmd == "memprof_start") {
+		const bool started = GodotMemoryTracking::start();
+		const GodotMemoryTracking::Summary s = GodotMemoryTracking::summary();
+		EngineDebugger::get_singleton()->send_message("servers:memprof_status", Array{
+				int64_t(s.capture_id), int64_t(s.sequence), int64_t(s.live_bytes), int64_t(s.peak_bytes),
+				int64_t(s.live_allocations), int64_t(s.total_allocations), int64_t(s.dropped_records),
+				int64_t(s.overwritten_events), s.active, s.incomplete, started });
+	} else if (p_cmd == "memprof_stop" || p_cmd == "memprof_status") {
+		if (p_cmd == "memprof_stop") {
+			GodotMemoryTracking::stop();
+		}
+		const GodotMemoryTracking::Summary s = GodotMemoryTracking::summary();
+		EngineDebugger::get_singleton()->send_message("servers:memprof_status", Array{
+				int64_t(s.capture_id), int64_t(s.sequence), int64_t(s.live_bytes), int64_t(s.peak_bytes),
+				int64_t(s.live_allocations), int64_t(s.total_allocations), int64_t(s.dropped_records),
+				int64_t(s.overwritten_events), s.active, s.incomplete, true });
+	} else if (p_cmd == "memprof_records") {
+		// Serialize at most one small page per response, never per-allocation messages.
+		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
+			return ERR_INVALID_PARAMETER;
+		}
+		const int64_t offset = p_data[0];
+		const int64_t capture = p_data[1];
+		const GodotMemoryTracking::Summary s = GodotMemoryTracking::summary();
+		if (offset < 0 || s.active || capture != int64_t(s.capture_id)) {
+			return ERR_INVALID_PARAMETER;
+		}
+		GodotMemoryTracking::Record records[64];
+		const size_t count = GodotMemoryTracking::live_records((size_t)offset, records, 64);
+		Array result = { int64_t(s.capture_id), offset, int64_t(count) };
+		for (size_t i = 0; i < count; i++) {
+			result.push_back(int64_t(records[i].allocation_id));
+			result.push_back(int64_t(records[i].address));
+			result.push_back(int64_t(records[i].bytes));
+			result.push_back(int64_t(records[i].category));
+			result.push_back(int64_t(records[i].generation));
+		}
+		EngineDebugger::get_singleton()->send_message("servers:memprof_records", result);
 	} else if (p_cmd == "draw") { // Forced redraw.
 		// For camera override to stay live when the game is paused from the editor.
 		double delta = 0.0;
