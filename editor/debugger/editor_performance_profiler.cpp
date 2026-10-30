@@ -31,6 +31,7 @@
 #include "editor_performance_profiler.h"
 
 #include "core/object/callable_mp.h"
+#include "core/os/os.h"
 #include "core/string/translation_server.h"
 #include "editor/editor_string_names.h"
 #include "editor/inspector/editor_property_name_processor.h"
@@ -38,6 +39,7 @@
 #include "editor/themes/editor_scale.h"
 #include "editor/themes/editor_theme_manager.h"
 #include "main/performance.h"
+#include "servers/rendering/rendering_server.h"
 
 EditorPerformanceProfiler::Monitor::Monitor(const String &p_name, const String &p_base, int p_frame_index, Performance::MonitorType p_type, TreeItem *p_item) {
 	type = p_type;
@@ -367,6 +369,10 @@ void EditorPerformanceProfiler::update_monitors(const Vector<StringName> &p_name
 
 void EditorPerformanceProfiler::add_profile_frame(const Vector<float> &p_values) {
 	for (KeyValue<StringName, Monitor> &E : monitors) {
+		if (E.value.frame_index == -1) {
+			// Editor (self) data is sampled locally, never from a remote game frame.
+			continue;
+		}
 		float value = 0.0f;
 		if (E.value.frame_index >= 0 && E.value.frame_index < p_values.size()) {
 			value = p_values[E.value.frame_index];
@@ -387,6 +393,32 @@ List<float> *EditorPerformanceProfiler::get_monitor_data(const StringName &p_nam
 
 void EditorPerformanceProfiler::_notification(int p_what) {
 	switch (p_what) {
+		case NOTIFICATION_PROCESS: {
+			const uint64_t now = OS::get_singleton()->get_ticks_usec();
+			if (last_editor_sample_us && now - last_editor_sample_us < 100000) {
+				break;
+			}
+			last_editor_sample_us = now;
+			const Performance *perf = Performance::get_singleton();
+			auto record = [&](const StringName &p_key, float p_value) {
+				Monitor *monitor = monitors.getptr(p_key);
+				if (!monitor || !monitor->item) {
+					return;
+				}
+				monitor->history.push_front(p_value);
+				if (monitor->history.size() > 500) {
+					monitor->history.pop_back();
+				}
+				_update_monitor_value(monitor, p_value);
+			};
+			record("editor:self/frame_time", perf->get_editor_main_frame_time());
+			record("editor:self/render_sync_time", perf->get_editor_render_sync_time());
+			record("editor:self/native_cpu", perf->get_monitor(Performance::MEMORY_CAPTURE_NATIVE_LIVE));
+			record("editor:self/gpu_backing", perf->get_monitor(Performance::MEMORY_CAPTURE_GPU_BACKING_LIVE));
+			record("editor:self/gpu_logical", perf->get_monitor(Performance::MEMORY_CAPTURE_GPU_LOGICAL_LIVE));
+			record("editor:self/event_drops", perf->get_monitor(Performance::MEMORY_CAPTURE_EVENT_DROPS));
+			monitor_draw->queue_redraw();
+		} break;
 		case NOTIFICATION_TRANSLATION_CHANGED: {
 			if (is_ready()) {
 				_build_monitor_tree();
@@ -453,6 +485,19 @@ EditorPerformanceProfiler::EditorPerformanceProfiler() {
 		const String name = path.get_slicec('/', 1);
 		monitors.insert(path, Monitor(name, base, i, Performance::get_singleton()->get_monitor_type(monitor), nullptr));
 	}
+
+	// Locally sampled editor metrics use a separate process-specific namespace
+	// and never consume the debugged game's remote sample frame index.
+	const bool separate = OS::get_singleton()->is_separate_thread_rendering_enabled() &&
+			!RenderingServer::get_singleton()->is_on_render_thread();
+	const String editor_base = separate ? "Editor (self) - separate renderer" : "Editor (self) - safe renderer";
+	monitors.insert("editor:self/frame_time", Monitor("Main frame time", editor_base, -1, Performance::MONITOR_TYPE_TIME, nullptr));
+	monitors.insert("editor:self/render_sync_time", Monitor("Render sync wait", editor_base, -1, Performance::MONITOR_TYPE_TIME, nullptr));
+	monitors.insert("editor:self/native_cpu", Monitor("Captured native CPU bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
+	monitors.insert("editor:self/gpu_backing", Monitor("Captured GPU backing bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
+	monitors.insert("editor:self/gpu_logical", Monitor("Captured GPU logical RID bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
+	monitors.insert("editor:self/event_drops", Monitor("Dropped capture events", editor_base, -1, Performance::MONITOR_TYPE_QUANTITY, nullptr));
+	set_process(true);
 
 	_build_monitor_tree();
 }
