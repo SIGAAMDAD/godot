@@ -862,6 +862,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, con
 	}
 	vmem_capture_id = id;
 	vmem_native_recording = active;
+	_update_buttons_state();
 	vmem_capture_status->set_text(vformat("Capture %d: %s, CPU live %s (%d allocs), CPU peak %s; GPU allocated %s (%d allocations), GPU peak %s; GPU logical RID %s (%d allocs), peak %s%s",
 			id, active ? TTR("recording") : TTR("stopped"),
 			String::humanize_size(int64_t(p_data[2])), int64_t(p_data[4]),
