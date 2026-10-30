@@ -527,6 +527,7 @@ void ScriptEditorDebugger::_video_mem_request() {
 void ScriptEditorDebugger::_video_mem_capture_start() {
 	vmem_capture_id = 0;
 	vmem_native_recording = false;
+	vmem_last_status_poll_us = 0;
 	vmem_trace_requested_capture = 0;
 	vmem_trace_payload.clear();
 	vmem_trace_export_path.clear();
@@ -852,7 +853,7 @@ void ScriptEditorDebugger::_msg_servers_memory_usage(uint64_t p_thread_id, const
 }
 
 void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, const Array &p_data) {
-	if (p_data.size() != 21) {
+	if (p_data.size() != 22) {
 		return;
 	}
 	const int64_t id = p_data[0];
@@ -865,6 +866,11 @@ void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, con
 	}
 	vmem_capture_id = id;
 	vmem_native_recording = active;
+	if (active) {
+		profiler->add_remote_memory_sample(uint64_t(id), uint64_t(int64_t(p_data[21])),
+				uint64_t(int64_t(p_data[2])), uint64_t(int64_t(p_data[10])), uint64_t(int64_t(p_data[14])),
+				uint64_t(int64_t(p_data[5])), uint64_t(int64_t(p_data[6])) + uint64_t(int64_t(p_data[7])));
+	}
 	_update_buttons_state();
 	vmem_capture_status->set_text(vformat("Capture %d: %s, CPU live %s (%d allocs), CPU peak %s; GPU backing %s (%d allocations), peak %s; GPU logical RID %s (%d allocs), peak %s; GPU allocator %s, reserved %s, budget %s%s",
 			id, active ? TTR("recording") : TTR("stopped"),
@@ -1747,6 +1753,13 @@ void ScriptEditorDebugger::_notification(int p_what) {
 		case NOTIFICATION_PROCESS: {
 			if (is_session_active()) {
 				peer->poll();
+				if (vmem_native_recording) {
+					const uint64_t now = OS::get_singleton()->get_ticks_usec();
+					if (now - vmem_last_status_poll_us >= 100000) {
+						vmem_last_status_poll_us = now;
+						_put_msg("servers:memprof_status", Array());
+					}
+				}
 
 				if (camera_override == CameraOverride::OVERRIDE_EDITORS) {
 					// CanvasItem Editor
