@@ -74,9 +74,11 @@ void *Memory::realloc_aligned_static(void *p_memory, size_t p_bytes, size_t p_pr
 	}
 
 	void *ret = alloc_aligned_static(p_bytes, p_alignment);
-	if (ret) {
-		memcpy(ret, p_memory, p_prev_bytes);
+	if (ret == nullptr) {
+		// A failed realloc must retain the caller's original allocation.
+		return nullptr;
 	}
+	memcpy(ret, p_memory, p_prev_bytes < p_bytes ? p_prev_bytes : p_bytes);
 	free_aligned_static(p_memory);
 	return ret;
 }
@@ -145,14 +147,7 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 		mem -= DATA_OFFSET;
 		uint64_t *s = (uint64_t *)(mem + SIZE_OFFSET);
 
-#ifdef DEBUG_ENABLED
-		if (p_bytes > *s) {
-			uint64_t new_mem_usage = _current_mem_usage.add(p_bytes - *s);
-			_max_mem_usage.exchange_if_greater(new_mem_usage);
-		} else {
-			_current_mem_usage.sub(*s - p_bytes);
-		}
-#endif
+		const uint64_t old_bytes = *s;
 
 		if (p_bytes == 0) {
 			GodotMemoryTracking::record_free(p_memory);
@@ -160,19 +155,26 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 			free(mem);
 			return nullptr;
 		} else {
-			*s = p_bytes;
-
 			GodotProfileFree(mem);
-			mem = (uint8_t *)realloc(mem, p_bytes + DATA_OFFSET);
-			ERR_FAIL_NULL_V(mem, nullptr);
-			GodotProfileAlloc(mem, p_bytes + DATA_OFFSET);
-
-			s = (uint64_t *)(mem + SIZE_OFFSET);
-
+			uint8_t *new_mem = (uint8_t *)realloc(mem, p_bytes + DATA_OFFSET);
+			if (new_mem == nullptr) {
+				// realloc left the original pointer and size intact.
+				GodotProfileAlloc(mem, old_bytes + DATA_OFFSET);
+				return nullptr;
+			}
+			GodotProfileAlloc(new_mem, p_bytes + DATA_OFFSET);
+#ifdef DEBUG_ENABLED
+			if (p_bytes > old_bytes) {
+				uint64_t new_mem_usage = _current_mem_usage.add(p_bytes - old_bytes);
+				_max_mem_usage.exchange_if_greater(new_mem_usage);
+			} else {
+				_current_mem_usage.sub(old_bytes - p_bytes);
+			}
+#endif
+			s = (uint64_t *)(new_mem + SIZE_OFFSET);
 			*s = p_bytes;
-
-			GodotMemoryTracking::record_realloc(p_memory, mem + DATA_OFFSET, p_bytes, true);
-			return mem + DATA_OFFSET;
+			GodotMemoryTracking::record_realloc(p_memory, new_mem + DATA_OFFSET, p_bytes, true);
+			return new_mem + DATA_OFFSET;
 		}
 	} else {
 		GodotProfileFree(mem);
