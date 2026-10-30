@@ -89,3 +89,23 @@ Editor A/B capture uses a 25-column CSV including timestamp, build,
 trial, workload identity and effective render-thread mode. Optional
 GODOT_BENCH_TRIAL_ID supplies the trial identifier. Unsupported GPU
 duration and input-to-paint latency fields remain blank.
+
+
+## Imported-trace paging and editor render timing
+
+Opening a native trace retains its validated bounded record/event data for offline
+paging. Use the existing Load More controls to inspect successive 256-row pages
+for CPU allocations, GPU backing allocations, logical GPU RIDs, and event history.
+The filter acts on the rows currently loaded. Export Native Trace can save the
+original imported bytes without requiring a running debug session.
+
+Native allocation and free events for the same shard are now published while
+the shard is locked so a reused address cannot emit its free event ahead of its
+recorded allocation.
+
+The editor A/B CSV render_server_frame_us field is populated from the most
+recent completed RenderingServerDefault frame duration. This is a CPU-side
+render-worker measurement, not GPU elapsed time; when the rendering thread is
+separate, the sample can describe a recently completed prior frame. The
+render_queue_wait_us field is the measured main-thread RenderingServer::sync
+wait. Neither value should be represented as input-to-paint latency.

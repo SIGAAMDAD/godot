@@ -102,6 +102,7 @@ struct State {
 // The state persists to process shutdown. No callback can race a state free.
 std::atomic<State *> state{ nullptr };
 thread_local uint32_t active_category = 0;
+std::atomic<uint64_t> completed_render_frame_us{ 0 };
 
 size_t shard_index(uintptr_t p_ptr) {
 	uint64_t h = (uint64_t)(p_ptr >> 4);
@@ -248,11 +249,12 @@ void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind 
 			uint64_t old_peak = peak_bytes.load(std::memory_order_relaxed);
 			while (old_peak < live && !peak_bytes.compare_exchange_weak(old_peak, live, std::memory_order_relaxed)) {
 			}
+			// Serialize an address's allocation event before any other thread can
+			// reuse or free that slot. A later free must never precede its alloc.
+			write_event(p_state, p_kind, added, p_gpu || p_logical);
 		}
 	}
-	if (inserted) {
-		write_event(p_state, p_kind, added, p_gpu || p_logical);
-	} else {
+	if (!inserted) {
 		p_state->dropped_records.fetch_add(1, std::memory_order_relaxed);
 	}
 }
@@ -265,7 +267,6 @@ void remove_record(State *p_state, uintptr_t p_address, bool p_gpu = false, bool
 	}
 	Shard &shard = (p_logical ? p_state->logical_shards : p_gpu ? p_state->gpu_shards : p_state->shards)[shard_index(p_address)];
 	Slot removed;
-	bool found = false;
 	{
 		std::lock_guard<std::mutex> guard(shard.mutex);
 		const size_t start = slot_index(p_address);
@@ -279,13 +280,10 @@ void remove_record(State *p_state, uintptr_t p_address, bool p_gpu = false, bool
 				s.address = TOMBSTONE;
 				live_bytes.fetch_sub(s.bytes, std::memory_order_relaxed);
 				live_allocations.fetch_sub(1, std::memory_order_relaxed);
-				found = true;
+				write_event(p_state, RecordKind::FREE, removed, p_gpu || p_logical);
 				break;
 			}
 		}
-	}
-	if (found) {
-		write_event(p_state, RecordKind::FREE, removed, p_gpu || p_logical);
 	}
 	// An allocation that predates capture is not a tracking error.
 }
@@ -571,6 +569,14 @@ void record_realloc(void *p_old_ptr, void *p_new_ptr, size_t p_bytes, bool p_suc
 		}
 		p->active_hooks.fetch_sub(1, std::memory_order_release);
 	}
+}
+
+void publish_render_frame_us(uint64_t p_microseconds) {
+	completed_render_frame_us.store(p_microseconds, std::memory_order_release);
+}
+
+uint64_t last_render_frame_us() {
+	return completed_render_frame_us.load(std::memory_order_acquire);
 }
 
 void set_frame(uint64_t p_frame) {

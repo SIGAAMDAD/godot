@@ -130,6 +130,10 @@ struct RendererSample {
 void publish_renderer_sample(uint64_t p_duration_us);
 bool renderer_sample(RendererSample &r_sample);
 
+// Last completed render frame CPU duration for editor A/B telemetry.
+void publish_render_frame_us(uint64_t p_microseconds);
+uint64_t last_render_frame_us();
+
 
 class ScopeCategory {
 	uint32_t previous;

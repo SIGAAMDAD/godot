@@ -30,6 +30,7 @@
 
 #include "rendering_server_default.h"
 
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/object/callable_mp.h"
 #include "core/os/os.h"
 #include "core/profiling/profiling.h"
@@ -74,6 +75,7 @@ void RenderingServerDefault::request_frame_drawn_callback(const Callable &p_call
 }
 
 void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
+	const uint64_t render_frame_begin_us = OS::get_singleton()->get_ticks_usec();
 	GodotProfileZoneGroupedFirst(_profile_zone, "rasterizer->begin_frame");
 	RSG::rasterizer->begin_frame(frame_step);
 
@@ -210,6 +212,7 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
 
 	GodotProfileZoneGrouped(_profile_zone, "memory_info");
 	RSG::utilities->update_memory_info();
+	GodotMemoryTracking::publish_render_frame_us(OS::get_singleton()->get_ticks_usec() - render_frame_begin_us);
 }
 
 void RenderingServerDefault::_run_post_draw_steps() {

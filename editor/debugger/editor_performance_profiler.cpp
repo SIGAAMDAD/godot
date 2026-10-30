@@ -38,6 +38,7 @@
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
 #include "editor/themes/editor_theme_manager.h"
+#include "core/memory_tracking/memory_tracker.h"
 #include "main/performance.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -413,6 +414,7 @@ void EditorPerformanceProfiler::_notification(int p_what) {
 			};
 			record("editor:self/frame_time", perf->get_editor_main_frame_time());
 			record("editor:self/render_sync_time", perf->get_editor_render_sync_time());
+			record("editor:self/render_worker_time", GodotMemoryTracking::last_render_frame_us() / 1000000.0f);
 			record("editor:self/native_cpu", perf->get_monitor(Performance::MEMORY_CAPTURE_NATIVE_LIVE));
 			record("editor:self/gpu_backing", perf->get_monitor(Performance::MEMORY_CAPTURE_GPU_BACKING_LIVE));
 			record("editor:self/gpu_logical", perf->get_monitor(Performance::MEMORY_CAPTURE_GPU_LOGICAL_LIVE));
@@ -495,6 +497,7 @@ EditorPerformanceProfiler::EditorPerformanceProfiler() {
 	const String editor_base = separate ? "Editor (self) - separate renderer" : "Editor (self) - safe renderer";
 	monitors.insert("editor:self/frame_time", Monitor("Main frame time", editor_base, -1, Performance::MONITOR_TYPE_TIME, nullptr));
 	monitors.insert("editor:self/render_sync_time", Monitor("Render sync wait", editor_base, -1, Performance::MONITOR_TYPE_TIME, nullptr));
+	monitors.insert("editor:self/render_worker_time", Monitor("Last completed render frame", editor_base, -1, Performance::MONITOR_TYPE_TIME, nullptr));
 	monitors.insert("editor:self/native_cpu", Monitor("Captured native CPU bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
 	monitors.insert("editor:self/gpu_backing", Monitor("Captured GPU backing bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
 	monitors.insert("editor:self/gpu_logical", Monitor("Captured GPU logical RID bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));

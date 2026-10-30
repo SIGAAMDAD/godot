@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "core/memory_tracking/memory_tracker.h"
 #include "core/object/script_language.h"
 #include "core/os/process_id.h"
 #include "editor/debugger/editor_debugger_inspector.h"
@@ -165,6 +166,15 @@ private:
 	Button *vmem_trace_export = nullptr;
 	Button *vmem_trace_import = nullptr;
 	PackedByteArray vmem_trace_payload;
+	PackedByteArray vmem_import_blob;
+	Vector<GodotMemoryTracking::Record> vmem_import_cpu;
+	Vector<GodotMemoryTracking::Record> vmem_import_gpu;
+	Vector<GodotMemoryTracking::Record> vmem_import_logical;
+	Vector<GodotMemoryTracking::Event> vmem_import_events;
+	int vmem_import_cpu_offset = 0;
+	int vmem_import_gpu_offset = 0;
+	int vmem_import_logical_offset = 0;
+	int vmem_import_event_offset = 0;
 	String vmem_trace_export_path;
 	HashMap<uint64_t, int64_t> vmem_trace_current_bytes;
 	HashMap<uint64_t, int64_t> vmem_trace_current_count;
@@ -307,6 +317,8 @@ private:
 	void _video_mem_capture_gpu_more();
 	void _video_mem_capture_logical_more();
 	void _video_mem_capture_event_more();
+	void _video_mem_import_records_page(int p_domain);
+	void _video_mem_import_events_page();
 	void _video_mem_capture_export();
 	void _video_mem_filter_changed(const String &p_filter);
 	void _video_mem_trace_export();

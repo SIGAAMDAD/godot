@@ -250,6 +250,8 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 	uint64_t budget_reserved = 0;
 	uint64_t budget_bytes = 0;
 	bool budget_supported = false;
+	bool budget_seen = false;
+	bool logical_seen = false;
 	size_t offset = HEADER_SIZE;
 	bool completed = false;
 	while (offset + CHUNK_HEADER_SIZE <= p_size) {
@@ -306,22 +308,25 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 				}
 			}
 		} else if (type == 6) {
-			if (count != 1 || len != 32 || get32(data + 24) > 1) {
+			if (budget_seen || count != 1 || len != 32 || get32(data + 24) > 1) {
 				return false;
 			}
+			budget_seen = true;
 			budget_allocated = get64(data);
 			budget_reserved = get64(data + 8);
 			budget_bytes = get64(data + 16);
 			budget_supported = get32(data + 24) != 0;
 		} else if (type == 9) {
-			if (len != 24 || count != 3) {
+			if (logical_seen || len != 24 || count != 3) {
 				return false;
 			}
+			logical_seen = true;
 			logical_live = get64(data);
 			logical_peak = get64(data + 8);
 			logical_allocations = get64(data + 16);
 		} else if (type == 7) {
-			if (completed || count != 1 || len != FOOTER_SIZE || get64(data) != capture ||
+			if (completed || !budget_seen || !logical_seen || count != 1 || len != FOOTER_SIZE ||
+					get64(data) != capture || get64(data + 8) < last_seq ||
 					get64(data + 92) != hash || offset + CHUNK_HEADER_SIZE + len != p_size) {
 				return false;
 			}

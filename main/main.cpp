@@ -5308,13 +5308,14 @@ bool Main::iteration() {
 			const Size2i viewport = DisplayServer::get_singleton()->window_get_size();
 			const uint64_t frame_duration_us = OS::get_singleton()->get_ticks_usec() - ticks;
 			const uint64_t timestamp_us = OS::get_singleton()->get_ticks_usec();
-			std::fprintf(editor_thread_benchmark_file, "%llu,%d,%s,%s,%s,%s,%s,%d,%d,%d,%s,%s,%s,%llu,%llu,%llu,%llu,,%llu,,,,,0,\n",
+			std::fprintf(editor_thread_benchmark_file, "%llu,%d,%s,%s,%s,%s,%s,%d,%d,%d,%s,%s,%s,%llu,%llu,%llu,%llu,%llu,%llu,,,,,0,\n",
 					(unsigned long long)editor_thread_benchmark_run_id, editor_thread_benchmark_trial_id,
 					editor_thread_benchmark_workload.utf8().get_data(), editor_thread_benchmark_workload_hash.utf8().get_data(),
 					GODOT_VERSION_HASH, editor_thread_benchmark_host.utf8().get_data(), rendering_driver.utf8().get_data(),
 					viewport.width, viewport.height, int(window_vsync_mode), "default", requested, effective,
 					(unsigned long long)editor_thread_benchmark_run_id, (unsigned long long)editor_thread_benchmark_frames++,
 					(unsigned long long)timestamp_us, (unsigned long long)frame_duration_us,
+					(unsigned long long)GodotMemoryTracking::last_render_frame_us(),
 					(unsigned long long)editor_render_sync_us);
 		}
 	}
