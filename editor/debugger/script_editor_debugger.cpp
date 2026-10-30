@@ -523,6 +523,7 @@ void ScriptEditorDebugger::_video_mem_request() {
 
 void ScriptEditorDebugger::_video_mem_capture_start() {
 	vmem_capture_id = 0;
+	vmem_native_recording = false;
 	vmem_trace_requested_capture = 0;
 	vmem_trace_payload.clear();
 	vmem_trace_export_path.clear();
@@ -860,6 +861,7 @@ void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, con
 		return;
 	}
 	vmem_capture_id = id;
+	vmem_native_recording = active;
 	vmem_capture_status->set_text(vformat("Capture %d: %s, CPU live %s (%d allocs), CPU peak %s; GPU allocated %s (%d allocations), GPU peak %s; GPU logical RID %s (%d allocs), peak %s%s",
 			id, active ? TTR("recording") : TTR("stopped"),
 			String::humanize_size(int64_t(p_data[2])), int64_t(p_data[4]),
@@ -1873,6 +1875,8 @@ void ScriptEditorDebugger::_update_buttons_state() {
 	const bool active = is_session_active();
 	const bool has_editor_tree = active && editor_remote_tree && editor_remote_tree->get_selected();
 	vmem_refresh->set_disabled(!active);
+	vmem_capture->set_disabled(!active || vmem_native_recording);
+	vmem_capture_stop->set_disabled(!active || !vmem_native_recording);
 	step->set_disabled(!active || !is_breaked() || !is_debuggable());
 	next->set_disabled(!active || !is_breaked() || !is_debuggable());
 	out->set_disabled(!active || !is_breaked() || !is_debuggable());
@@ -1913,6 +1917,15 @@ void ScriptEditorDebugger::_stop_and_notify() {
 }
 
 void ScriptEditorDebugger::stop() {
+	if (vmem_trace_requested_capture != 0) {
+		vmem_trace_export_path.clear();
+		vmem_trace_payload.clear();
+		vmem_trace_requested_capture = 0;
+		vmem_capture_status->set_text(TTR("Memory trace transfer interrupted by debugger disconnect."));
+	} else if (vmem_native_recording) {
+		vmem_capture_status->set_text(TTR("Memory capture interrupted by debugger disconnect (incomplete)."));
+	}
+	vmem_native_recording = false;
 	set_process(false);
 	threads_debugged.clear();
 	debugging_thread_id = Thread::UNASSIGNED_ID;
