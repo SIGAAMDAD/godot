@@ -35,6 +35,7 @@
 #include "core/debugger/engine_debugger.h"
 #include "core/debugger/engine_profiler.h"
 #include "core/io/resource_loader.h"
+#include "core/memory_tracking/memory_trace.h"
 #include "core/memory_tracking/memory_tracker.h"
 #include "core/object/script_language.h"
 #include "core/os/os.h"
@@ -405,6 +406,8 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 	if (p_cmd == "memory") {
 		singleton->_send_resource_usage();
 	} else if (p_cmd == "memprof_start") {
+		singleton->memory_trace_cache.clear();
+		singleton->memory_trace_capture_id = 0;
 		const bool started = GodotMemoryTracking::start();
 		const GodotMemoryTracking::Summary s = GodotMemoryTracking::summary();
 		EngineDebugger::get_singleton()->send_message("servers:memprof_status", Array{
@@ -443,6 +446,57 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			result.push_back(int64_t(records[i].generation));
 		}
 		EngineDebugger::get_singleton()->send_message(gpu_records ? "servers:memprof_gpu_records" : "servers:memprof_records", result);
+	} else if (p_cmd == "memprof_trace_chunk") {
+		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
+			return ERR_INVALID_PARAMETER;
+		}
+		const int64_t requested_capture = p_data[0];
+		const int64_t requested_offset = p_data[1];
+		const GodotMemoryTracking::Summary snapshot = GodotMemoryTracking::summary();
+		if (requested_capture <= 0 || requested_capture != int64_t(snapshot.capture_id) || snapshot.active ||
+				requested_offset < 0 || requested_offset > 32 * 1024 * 1024) {
+			return ERR_INVALID_PARAMETER;
+		}
+		if (requested_offset == 0) {
+			singleton->memory_trace_cache.clear();
+			singleton->memory_trace_capture_id = 0;
+			auto sink = [](const uint8_t *p_bytes, size_t p_size, void *p_userdata) -> bool {
+				Vector<uint8_t> *buffer = static_cast<Vector<uint8_t> *>(p_userdata);
+				if (p_size > size_t(32 * 1024 * 1024 - buffer->size())) {
+					return false;
+				}
+				const int old_size = buffer->size();
+				if (buffer->resize(old_size + int(p_size)) != OK) {
+					return false;
+				}
+				memcpy(buffer->ptrw() + old_size, p_bytes, p_size);
+				return true;
+			};
+			if (!GodotMemoryTracking::write_trace(sink, &singleton->memory_trace_cache)) {
+				singleton->memory_trace_cache.clear();
+				EngineDebugger::get_singleton()->send_message("servers:memprof_trace_error", Array{ requested_capture, "Failed to serialize stopped capture" });
+				return OK;
+			}
+			singleton->memory_trace_capture_id = uint64_t(requested_capture);
+		}
+		if (singleton->memory_trace_capture_id != uint64_t(requested_capture) ||
+				requested_offset > singleton->memory_trace_cache.size()) {
+			return ERR_INVALID_PARAMETER;
+		}
+		const int remaining = singleton->memory_trace_cache.size() - int(requested_offset);
+		const int count = MIN(remaining, 32 * 1024);
+		PackedByteArray payload;
+		payload.resize(count);
+		if (count > 0) {
+			memcpy(payload.ptrw(), singleton->memory_trace_cache.ptr() + requested_offset, count);
+		}
+		const bool done = requested_offset + count == singleton->memory_trace_cache.size();
+		EngineDebugger::get_singleton()->send_message("servers:memprof_trace_chunk",
+				Array{ requested_capture, requested_offset, payload, singleton->memory_trace_cache.size(), done });
+		if (done) {
+			singleton->memory_trace_cache.clear();
+			singleton->memory_trace_capture_id = 0;
+		}
 	} else if (p_cmd == "memprof_events") {
 		// Bounded event history; the capture ID prevents cross-session mixing.
 		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
