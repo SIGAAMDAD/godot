@@ -152,6 +152,9 @@ private:
 	LineEdit *vmem_capture_status = nullptr;
 	Tree *vmem_alloc_tree = nullptr;
 	Tree *vmem_gpu_alloc_tree = nullptr;
+	Tree *vmem_logical_alloc_tree = nullptr;
+	Button *vmem_logical_alloc_more = nullptr;
+	int64_t vmem_logical_alloc_next_offset = 0;
 	Button *vmem_gpu_alloc_more = nullptr;
 	int64_t vmem_gpu_alloc_next_offset = 0;
 	uint64_t vmem_event_next_sequence = 1;
@@ -254,6 +257,7 @@ private:
 	void _msg_servers_memprof_status(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_records(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_gpu_records(uint64_t p_thread_id, const Array &p_data);
+	void _msg_servers_memprof_gpu_logical_records(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_events(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_trace_chunk(uint64_t p_thread_id, const Array &p_data);
 	void _msg_servers_memprof_trace_error(uint64_t p_thread_id, const Array &p_data);
@@ -294,6 +298,7 @@ private:
 	void _video_mem_capture_stop();
 	void _video_mem_capture_more();
 	void _video_mem_capture_gpu_more();
+	void _video_mem_capture_logical_more();
 	void _video_mem_capture_event_more();
 	void _video_mem_capture_export();
 	void _video_mem_trace_export();
