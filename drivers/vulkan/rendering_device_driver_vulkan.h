@@ -801,6 +801,7 @@ public:
 	VkDevice vulkan_device_get() const { return vk_device; }
 #endif
 
+	virtual MemoryBudgetSnapshot get_memory_budget_snapshot() override final;
 	virtual uint64_t get_total_memory_used() override final;
 	virtual uint64_t get_lazily_memory_used() override final;
 	virtual uint64_t limit_get(Limit p_limit) override final;
