@@ -147,6 +147,10 @@
 
 #include "modules/modules_enabled.gen.h" // For mono.
 
+#ifdef TOOLS_ENABLED
+#include <cstdio>
+#endif
+
 #if defined(MODULE_MONO_ENABLED) && defined(TOOLS_ENABLED)
 #include "modules/mono/editor/bindings_generator.h"
 #endif
@@ -223,6 +227,15 @@ static bool auto_build_solutions = false;
 static String debug_server_uri;
 static bool wait_for_import = false;
 static bool restore_editor_window_layout = true;
+// Editor-only A/B benchmark: capture main frame and render sync durations.
+// Diagnostic overhead is paid only when the CLI capture path is supplied.
+static String editor_thread_benchmark_path;
+static String editor_thread_benchmark_host;
+static String editor_thread_benchmark_workload;
+static String editor_thread_benchmark_workload_hash;
+static std::FILE *editor_thread_benchmark_file = nullptr;
+static uint64_t editor_thread_benchmark_run_id = 0;
+static uint64_t editor_thread_benchmark_frames = 0;
 #ifndef DISABLE_DEPRECATED
 static int converter_max_kb_file = 4 * 1024; // 4MB
 static int converter_max_line_length = 100000;
@@ -531,6 +544,7 @@ void Main::print_help(const char *p_binary) {
 #endif // DISABLE_DEPRECATED
 #ifdef TOOLS_ENABLED
 	print_help_option("--editor-render-thread-experimental", "Allow an explicitly requested separate render thread in the Windows Vulkan editor (experimental).\n");
+	print_help_option("--editor-render-thread-benchmark <path>", "Write editor main-thread and render-sync timings to CSV (requires GODOT_BENCH_HOST_ID, GODOT_BENCH_WORKLOAD_ID and GODOT_BENCH_WORKLOAD_SHA256).\n");
 #endif
 #if defined(DEBUG_ENABLED) || defined(TOOLS_ENABLED)
 	print_help_option("--remote-fs <address>", "Remote filesystem (<host/IP>[:<port>] address).\n", CLI_OPTION_AVAILABILITY_TEMPLATE_DEBUG);
@@ -1570,6 +1584,13 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 #ifdef TOOLS_ENABLED
 		} else if (arg == "--editor-render-thread-experimental") {
 			editor_render_thread_experimental = true;
+		} else if (arg == "--editor-render-thread-benchmark") {
+			if (!N) {
+				OS::get_singleton()->print("Missing editor render-thread benchmark CSV path.\\n");
+				goto error;
+			}
+			editor_thread_benchmark_path = N->get();
+			N = N->next();
 		} else if (arg == "-e" || arg == "--editor") { // starts editor
 
 			editor = true;
@@ -2810,6 +2831,20 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		OS::get_singleton()->print("Experimental editor render-thread mode requires a Windows build with threading. Aborting.\n");
 		goto error;
 #endif
+	}
+	if (!editor_thread_benchmark_path.is_empty()) {
+		if (!editor || project_manager || !render_thread_mode_explicit ||
+				(separate_thread_render && !editor_render_thread_experimental)) {
+			OS::get_singleton()->print("Editor render-thread benchmark requires --editor with explicit --render-thread safe or --render-thread separate and the experimental flag for separate mode.\\n");
+			goto error;
+		}
+		editor_thread_benchmark_host = OS::get_singleton()->get_environment("GODOT_BENCH_HOST_ID");
+		editor_thread_benchmark_workload = OS::get_singleton()->get_environment("GODOT_BENCH_WORKLOAD_ID");
+		editor_thread_benchmark_workload_hash = OS::get_singleton()->get_environment("GODOT_BENCH_WORKLOAD_SHA256");
+		if (editor_thread_benchmark_host.is_empty() || editor_thread_benchmark_workload.is_empty() || editor_thread_benchmark_workload_hash.length() != 64) {
+			OS::get_singleton()->print("Editor benchmark requires host/workload environment metadata and a 64-character workload SHA-256.\\n");
+			goto error;
+		}
 	}
 	if ((editor || project_manager) && !editor_render_thread_experimental) {
 		// The editor and project manager default to rendering on the main thread.
@@ -5147,7 +5182,13 @@ bool Main::iteration() {
 #endif // NAVIGATION_3D_DISABLED
 
 	GodotProfileZoneGrouped(_profile_zone, "RenderingServer::sync");
+#ifdef TOOLS_ENABLED
+	const uint64_t editor_render_sync_begin = editor_thread_benchmark_path.is_empty() ? 0 : OS::get_singleton()->get_ticks_usec();
+#endif
 	RenderingServer::get_singleton()->sync(); //sync if still drawing from previous frames.
+#ifdef TOOLS_ENABLED
+	const uint64_t editor_render_sync_us = editor_render_sync_begin ? OS::get_singleton()->get_ticks_usec() - editor_render_sync_begin : 0;
+#endif
 
 	GodotProfileZoneGrouped(_profile_zone, "RenderingServer::draw");
 #ifdef RD_ENABLED
@@ -5244,6 +5285,35 @@ bool Main::iteration() {
 	}
 #endif
 
+#ifdef TOOLS_ENABLED
+	if (editor && !editor_thread_benchmark_path.is_empty()) {
+		if (!editor_thread_benchmark_file) {
+			editor_thread_benchmark_file = std::fopen(editor_thread_benchmark_path.utf8().get_data(), "wb");
+			if (editor_thread_benchmark_file) {
+				editor_thread_benchmark_run_id = OS::get_singleton()->get_ticks_usec();
+				std::fprintf(editor_thread_benchmark_file, "build_sha,host_id,backend,viewport_width,viewport_height,vsync,scaling_mode,workload_id,workload_sha256,run_id,trial_id,requested_mode,effective_mode,editor_main_frame_us,frame_id,capture_id,errors,render_queue_wait_us,render_server_frame_us,gpu_frame_us,input_to_paint_us\\n");
+			} else {
+				OS::get_singleton()->print("Could not open editor render-thread benchmark CSV.\\n");
+				editor_thread_benchmark_path.clear();
+			}
+		}
+		if (editor_thread_benchmark_file) {
+			// Main-thread identity is checked against the live RenderingServer worker.
+			const char *effective = RenderingServer::get_singleton()->is_on_render_thread() ? "safe" : "separate";
+			const char *requested = OS::get_singleton()->is_separate_thread_rendering_enabled() ? "separate" : "safe";
+			const Size2i viewport = DisplayServer::get_singleton()->window_get_size();
+			const uint64_t frame_duration_us = OS::get_singleton()->get_ticks_usec() - ticks;
+			std::fprintf(editor_thread_benchmark_file, "%s,%s,%s,%d,%d,%d,%s,%s,%s,%llu,%d,%s,%s,%llu,%llu,%d,,%llu,,,\\n",
+					GODOT_VERSION_HASH, editor_thread_benchmark_host.utf8().get_data(),
+					rendering_driver.utf8().get_data(), viewport.width, viewport.height,
+					int(window_vsync_mode), "default", editor_thread_benchmark_workload.utf8().get_data(),
+					editor_thread_benchmark_workload_hash.utf8().get_data(),
+					(unsigned long long)editor_thread_benchmark_run_id, 0, requested, effective,
+					(unsigned long long)frame_duration_us, (unsigned long long)editor_thread_benchmark_frames++, 1,
+					(unsigned long long)editor_render_sync_us);
+		}
+	}
+#endif
 	if (fixed_fps != -1) {
 		return exit;
 	}
@@ -5292,6 +5362,12 @@ void Main::force_redraw() {
  */
 void Main::cleanup(bool p_force) {
 	Thread::make_main_thread();
+#ifdef TOOLS_ENABLED
+	if (editor_thread_benchmark_file) {
+		std::fclose(editor_thread_benchmark_file);
+		editor_thread_benchmark_file = nullptr;
+	}
+#endif
 
 	GodotProfileZone("cleanup");
 	OS::get_singleton()->benchmark_begin_measure("Shutdown", "Main::Cleanup");
