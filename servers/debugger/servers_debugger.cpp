@@ -42,6 +42,8 @@
 #include "servers/display/display_server.h"
 #include "servers/rendering/rendering_server.h"
 
+#include <cstring>
+
 #define CHECK_SIZE(arr, expected, what) ERR_FAIL_COND_V_MSG((uint32_t)arr.size() < (uint32_t)(expected), false, String("Malformed ") + what + " message from script debugger, message too short. Expected size: " + itos(expected) + ", actual size: " + itos(arr.size()))
 #define CHECK_END(arr, expected, what) ERR_FAIL_COND_V_MSG((uint32_t)arr.size() > (uint32_t)expected, false, String("Malformed ") + what + " message from script debugger, message too long. Expected size: " + itos(expected) + ", actual size: " + itos(arr.size()))
 
@@ -413,7 +415,8 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 		EngineDebugger::get_singleton()->send_message("servers:memprof_status", Array{
 				int64_t(s.capture_id), int64_t(s.sequence), int64_t(s.live_bytes), int64_t(s.peak_bytes),
 				int64_t(s.live_allocations), int64_t(s.total_allocations), int64_t(s.dropped_records),
-				int64_t(s.overwritten_events), s.active, s.incomplete, int64_t(s.gpu_allocation_bytes), int64_t(s.gpu_peak_bytes), int64_t(s.gpu_live_allocations), started });
+				int64_t(s.overwritten_events), s.active, s.incomplete, int64_t(s.gpu_allocation_bytes), int64_t(s.gpu_peak_bytes), int64_t(s.gpu_live_allocations), started,
+				int64_t(s.gpu_logical_bytes), int64_t(s.gpu_logical_peak_bytes), int64_t(s.gpu_logical_allocations) });
 	} else if (p_cmd == "memprof_stop" || p_cmd == "memprof_status") {
 		if (p_cmd == "memprof_stop") {
 			GodotMemoryTracking::stop();
@@ -422,9 +425,11 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 		EngineDebugger::get_singleton()->send_message("servers:memprof_status", Array{
 				int64_t(s.capture_id), int64_t(s.sequence), int64_t(s.live_bytes), int64_t(s.peak_bytes),
 				int64_t(s.live_allocations), int64_t(s.total_allocations), int64_t(s.dropped_records),
-				int64_t(s.overwritten_events), s.active, s.incomplete, int64_t(s.gpu_allocation_bytes), int64_t(s.gpu_peak_bytes), int64_t(s.gpu_live_allocations), true });
-	} else if (p_cmd == "memprof_records" || p_cmd == "memprof_gpu_records") {
+				int64_t(s.overwritten_events), s.active, s.incomplete, int64_t(s.gpu_allocation_bytes), int64_t(s.gpu_peak_bytes), int64_t(s.gpu_live_allocations), true,
+				int64_t(s.gpu_logical_bytes), int64_t(s.gpu_logical_peak_bytes), int64_t(s.gpu_logical_allocations) });
+	} else if (p_cmd == "memprof_records" || p_cmd == "memprof_gpu_records" || p_cmd == "memprof_gpu_logical_records") {
 		const bool gpu_records = p_cmd == "memprof_gpu_records";
+		const bool logical_records = p_cmd == "memprof_gpu_logical_records";
 		// Serialize at most one small page per response, never per-allocation messages.
 		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
 			return ERR_INVALID_PARAMETER;
@@ -436,7 +441,8 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			return ERR_INVALID_PARAMETER;
 		}
 		GodotMemoryTracking::Record records[64];
-		const size_t count = gpu_records ? GodotMemoryTracking::gpu_live_records((size_t)offset, records, 64) : GodotMemoryTracking::live_records((size_t)offset, records, 64);
+		const size_t count = logical_records ? GodotMemoryTracking::gpu_logical_live_records((size_t)offset, records, 64) :
+				gpu_records ? GodotMemoryTracking::gpu_live_records((size_t)offset, records, 64) : GodotMemoryTracking::live_records((size_t)offset, records, 64);
 		Array result = { int64_t(s.capture_id), offset, int64_t(count) };
 		for (size_t i = 0; i < count; i++) {
 			result.push_back(int64_t(records[i].allocation_id));
@@ -445,7 +451,8 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			result.push_back(int64_t(records[i].category));
 			result.push_back(int64_t(records[i].generation));
 		}
-		EngineDebugger::get_singleton()->send_message(gpu_records ? "servers:memprof_gpu_records" : "servers:memprof_records", result);
+		EngineDebugger::get_singleton()->send_message(logical_records ? "servers:memprof_gpu_logical_records" :
+				gpu_records ? "servers:memprof_gpu_records" : "servers:memprof_records", result);
 	} else if (p_cmd == "memprof_trace_chunk") {
 		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
 			return ERR_INVALID_PARAMETER;
