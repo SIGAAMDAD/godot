@@ -341,7 +341,9 @@ void ScriptEditorDebugger::_video_mem_request() {
 void ScriptEditorDebugger::_video_mem_capture_start() {
 	vmem_capture_id = 0;
 	vmem_alloc_next_offset = 0;
+	vmem_gpu_alloc_next_offset = 0;
 	vmem_alloc_tree->clear();
+	vmem_gpu_alloc_tree->clear();
 	vmem_capture_status->set_text(TTR("Starting native allocation capture..."));
 	_put_msg("servers:memprof_start", Array());
 }
@@ -353,6 +355,12 @@ void ScriptEditorDebugger::_video_mem_capture_stop() {
 void ScriptEditorDebugger::_video_mem_capture_more() {
 	if (vmem_capture_id != 0) {
 		_put_msg("servers:memprof_records", Array{ vmem_alloc_next_offset, vmem_capture_id });
+	}
+}
+
+void ScriptEditorDebugger::_video_mem_capture_gpu_more() {
+	if (vmem_capture_id != 0) {
+		_put_msg("servers:memprof_gpu_records", Array{ vmem_gpu_alloc_next_offset, vmem_capture_id });
 	}
 }
 
@@ -562,8 +570,11 @@ void ScriptEditorDebugger::_msg_servers_memprof_status(uint64_t p_thread_id, con
 			incomplete ? TTR(" (incomplete trace)") : String()));
 	if (!active) {
 		vmem_alloc_next_offset = 0;
+		vmem_gpu_alloc_next_offset = 0;
 		vmem_alloc_tree->clear();
+		vmem_gpu_alloc_tree->clear();
 		_video_mem_capture_more();
+		_video_mem_capture_gpu_more();
 	}
 }
 
@@ -591,6 +602,32 @@ void ScriptEditorDebugger::_msg_servers_memprof_records(uint64_t p_thread_id, co
 	}
 	vmem_alloc_next_offset += count;
 	vmem_alloc_more->set_disabled(count < 64);
+}
+
+void ScriptEditorDebugger::_msg_servers_memprof_gpu_records(uint64_t p_thread_id, const Array &p_data) {
+	if (p_data.size() < 3 || int64_t(p_data[0]) != vmem_capture_id) {
+		return;
+	}
+	const int64_t offset = p_data[1];
+	const int64_t count = p_data[2];
+	if (offset != vmem_gpu_alloc_next_offset || count < 0 || count > 64 || p_data.size() != 3 + count * 5) {
+		return;
+	}
+	TreeItem *root = vmem_gpu_alloc_tree->get_root();
+	if (!root) {
+		root = vmem_gpu_alloc_tree->create_item();
+	}
+	for (int64_t i = 0; i < count; ++i) {
+		const int index = 3 + int(i) * 5;
+		TreeItem *item = vmem_gpu_alloc_tree->create_item(root);
+		item->set_text(0, itos(int64_t(p_data[index])));
+		item->set_text(1, itos(int64_t(p_data[index + 1])));
+		item->set_text(2, String::humanize_size(int64_t(p_data[index + 2])));
+		item->set_text(3, itos(int64_t(p_data[index + 3])));
+		item->set_text(4, itos(int64_t(p_data[index + 4])));
+	}
+	vmem_gpu_alloc_next_offset += count;
+	vmem_gpu_alloc_more->set_disabled(count < 64);
 }
 
 void ScriptEditorDebugger::_msg_servers_drawn(uint64_t p_thread_id, const Array &p_data) {
@@ -1105,6 +1142,7 @@ void ScriptEditorDebugger::_init_parse_message_handlers() {
 	parse_message_handlers["servers:memory_usage"] = &ScriptEditorDebugger::_msg_servers_memory_usage;
 	parse_message_handlers["servers:memprof_status"] = &ScriptEditorDebugger::_msg_servers_memprof_status;
 	parse_message_handlers["servers:memprof_records"] = &ScriptEditorDebugger::_msg_servers_memprof_records;
+	parse_message_handlers["servers:memprof_gpu_records"] = &ScriptEditorDebugger::_msg_servers_memprof_gpu_records;
 	parse_message_handlers["servers:drawn"] = &ScriptEditorDebugger::_msg_servers_drawn;
 	parse_message_handlers["stack_dump"] = &ScriptEditorDebugger::_msg_stack_dump;
 	parse_message_handlers["stack_frame_vars"] = &ScriptEditorDebugger::_msg_stack_frame_vars;
@@ -2580,6 +2618,22 @@ Instead, use the monitors tab to obtain more precise VRAM usage.
 		vmem_alloc_more->set_disabled(true);
 		vmem_vb->add_child(vmem_alloc_more);
 		vmem_alloc_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_more));
+		vmem_vb->add_child(memnew(Label(TTRC("GPU backing allocations created during capture (not logical resource totals):"))));
+		vmem_gpu_alloc_tree = memnew(Tree);
+		vmem_gpu_alloc_tree->set_columns(5);
+		vmem_gpu_alloc_tree->set_column_titles_visible(true);
+		vmem_gpu_alloc_tree->set_column_title(0, TTRC("Allocation ID"));
+		vmem_gpu_alloc_tree->set_column_title(1, TTRC("Backing Handle"));
+		vmem_gpu_alloc_tree->set_column_title(2, TTRC("Size"));
+		vmem_gpu_alloc_tree->set_column_title(3, TTRC("Category"));
+		vmem_gpu_alloc_tree->set_column_title(4, TTRC("Generation"));
+		vmem_gpu_alloc_tree->set_hide_root(true);
+		vmem_gpu_alloc_tree->set_custom_minimum_size(Size2(0, 120 * EDSCALE));
+		vmem_vb->add_child(vmem_gpu_alloc_tree);
+		vmem_gpu_alloc_more = memnew(Button(TTRC("Load More GPU Allocations")));
+		vmem_gpu_alloc_more->set_disabled(true);
+		vmem_vb->add_child(vmem_gpu_alloc_more);
+		vmem_gpu_alloc_more->connect(SceneStringName(pressed), callable_mp(this, &ScriptEditorDebugger::_video_mem_capture_gpu_more));
 		tabs->add_child(vmem_vb);
 
 		vmem_item_menu = memnew(PopupMenu);
