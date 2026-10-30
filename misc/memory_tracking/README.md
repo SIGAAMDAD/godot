@@ -66,7 +66,7 @@ bounded live allocation snapshot. Selecting a live allocation or event
 requests its deduplicated native callstack (up to 12 raw program counters).
 
 **Export Native Trace** transfers the stopped capture in 32 KiB messages
-and writes a bounded .gdmemtrace v1.1 file with CRC32-protected chunks,
+and writes a bounded .gdmemtrace v1.2 file with CRC32-protected chunks,
 a final hash and explicit completeness metadata. **Open Native Trace**
 validates the file before showing the captured CPU, GPU and event data.
 Raw process pointers and program counters are not exported. Stack IDs
