@@ -213,6 +213,14 @@ bool write_trace(TraceSink p_sink, void *p_userdata) {
 	if (!writer.chunk(9, end.sequence, 3, logical_totals, sizeof(logical_totals))) {
 		return false;
 	}
+	uint8_t budget_payload[32] = {};
+	put64(budget_payload, end.gpu_driver_allocated_bytes);
+	put64(budget_payload + 8, end.gpu_reserved_bytes);
+	put64(budget_payload + 16, end.gpu_budget_bytes);
+	put32(budget_payload + 24, end.gpu_budget_supported ? 1 : 0);
+	if (!writer.chunk(6, end.sequence, 1, budget_payload, sizeof(budget_payload))) {
+		return false;
+	}
 	uint8_t footer[FOOTER_SIZE] = {};
 	const uint64_t counts[] = { end.capture_id, end.sequence, end.live_bytes, end.peak_bytes,
 		end.live_allocations, end.total_allocations, end.dropped_records, end.overwritten_events,
@@ -238,6 +246,10 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 	uint64_t logical_live = 0;
 	uint64_t logical_peak = 0;
 	uint64_t logical_allocations = 0;
+	uint64_t budget_allocated = 0;
+	uint64_t budget_reserved = 0;
+	uint64_t budget_bytes = 0;
+	bool budget_supported = false;
 	size_t offset = HEADER_SIZE;
 	bool completed = false;
 	while (offset + CHUNK_HEADER_SIZE <= p_size) {
@@ -293,6 +305,14 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 					}
 				}
 			}
+		} else if (type == 6) {
+			if (count != 1 || len != 32 || get32(data + 24) > 1) {
+				return false;
+			}
+			budget_allocated = get64(data);
+			budget_reserved = get64(data + 8);
+			budget_bytes = get64(data + 16);
+			budget_supported = get32(data + 24) != 0;
 		} else if (type == 9) {
 			if (len != 24 || count != 3) {
 				return false;
@@ -320,6 +340,10 @@ bool read_trace(const uint8_t *p_bytes, size_t p_size, const TraceVisitor &p_vis
 			s.gpu_logical_bytes = logical_live;
 			s.gpu_logical_peak_bytes = logical_peak;
 			s.gpu_logical_allocations = logical_allocations;
+			s.gpu_driver_allocated_bytes = budget_allocated;
+			s.gpu_reserved_bytes = budget_reserved;
+			s.gpu_budget_bytes = budget_bytes;
+			s.gpu_budget_supported = budget_supported;
 			s.incomplete = get32(data + 88) != 0;
 			if (p_visitor.on_summary && !p_visitor.on_summary(s, p_visitor.userdata)) {
 				return false;
