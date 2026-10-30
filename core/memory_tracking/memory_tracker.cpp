@@ -90,6 +90,10 @@ struct State {
 	std::atomic<uint64_t> logical_peak_bytes{ 0 };
 	std::atomic<uint64_t> logical_live_allocations{ 0 };
 	std::atomic<uint64_t> logical_total_allocations{ 0 };
+	std::atomic<uint64_t> gpu_driver_allocated_bytes{ 0 };
+	std::atomic<uint64_t> gpu_reserved_bytes{ 0 };
+	std::atomic<uint64_t> gpu_budget_bytes{ 0 };
+	std::atomic<bool> gpu_budget_supported{ false };
 	std::atomic<uint64_t> total_allocations{ 0 };
 	std::atomic<uint64_t> dropped_records{ 0 };
 	std::atomic<uint64_t> overwritten_events{ 0 };
@@ -355,6 +359,10 @@ bool start() {
 	p->logical_peak_bytes.store(0, std::memory_order_relaxed);
 	p->logical_live_allocations.store(0, std::memory_order_relaxed);
 	p->logical_total_allocations.store(0, std::memory_order_relaxed);
+	p->gpu_driver_allocated_bytes.store(0, std::memory_order_relaxed);
+	p->gpu_reserved_bytes.store(0, std::memory_order_relaxed);
+	p->gpu_budget_bytes.store(0, std::memory_order_relaxed);
+	p->gpu_budget_supported.store(false, std::memory_order_relaxed);
 	p->total_allocations.store(0, std::memory_order_relaxed);
 	p->dropped_records.store(0, std::memory_order_relaxed);
 	p->overwritten_events.store(0, std::memory_order_relaxed);
@@ -394,6 +402,10 @@ Summary summary() {
 	result.gpu_logical_bytes = p->logical_live_bytes.load(std::memory_order_relaxed);
 	result.gpu_logical_peak_bytes = p->logical_peak_bytes.load(std::memory_order_relaxed);
 	result.gpu_logical_allocations = p->logical_live_allocations.load(std::memory_order_relaxed);
+	result.gpu_driver_allocated_bytes = p->gpu_driver_allocated_bytes.load(std::memory_order_relaxed);
+	result.gpu_reserved_bytes = p->gpu_reserved_bytes.load(std::memory_order_relaxed);
+	result.gpu_budget_bytes = p->gpu_budget_bytes.load(std::memory_order_relaxed);
+	result.gpu_budget_supported = p->gpu_budget_supported.load(std::memory_order_relaxed);
 	result.active = p->enabled.load(std::memory_order_acquire);
 	result.incomplete = result.dropped_records != 0 || result.overwritten_events != 0;
 	return result;
@@ -500,6 +512,17 @@ void record_gpu_free(void *p_allocation) {
 	State *p = enter_hook();
 	if (p) {
 		remove_record(p, (uintptr_t)p_allocation, true);
+		p->active_hooks.fetch_sub(1, std::memory_order_release);
+	}
+}
+
+void publish_gpu_budget(uint64_t p_allocated, uint64_t p_reserved, uint64_t p_budget, bool p_supported) {
+	State *p = enter_hook();
+	if (p) {
+		p->gpu_driver_allocated_bytes.store(p_allocated, std::memory_order_relaxed);
+		p->gpu_reserved_bytes.store(p_reserved, std::memory_order_relaxed);
+		p->gpu_budget_bytes.store(p_budget, std::memory_order_relaxed);
+		p->gpu_budget_supported.store(p_supported, std::memory_order_release);
 		p->active_hooks.fetch_sub(1, std::memory_order_release);
 	}
 }
