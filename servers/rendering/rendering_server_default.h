@@ -46,6 +46,8 @@
 #include "servers/rendering/rendering_server_types.h"
 #include "servers/server_wrap_mt_common.h"
 
+#include <atomic>
+
 class RenderingServerDefault : public RenderingServer {
 	GDSOFTCLASS(RenderingServerDefault, RenderingServer);
 
@@ -61,7 +63,9 @@ class RenderingServerDefault : public RenderingServer {
 
 	};
 
-	static int changes;
+	std::atomic<bool> renderer_resources_active{ false };
+	std::atomic<uint64_t> change_generation{ 0 };
+	uint64_t last_submitted_generation = 0;
 	RID test_cube;
 
 	List<Callable> frame_drawn_callbacks;
@@ -70,8 +74,15 @@ class RenderingServerDefault : public RenderingServer {
 
 	uint64_t frame_profile_frame = 0;
 	Vector<RenderingServerTypes::FrameProfileArea> frame_profile;
+	mutable Mutex profile_snapshot_mutex;
+	RenderingServerTypes::RenderFrameProfileSnapshot profile_snapshot;
 
+	mutable Mutex rendering_info_mutex;
+	uint64_t rendering_info_snapshot[RSE::RENDERING_INFO_MAX] = {};
+	bool rendering_info_available = false;
 	double frame_setup_time = 0;
+	double published_frame_setup_time = 0;
+	RenderingServerTypes::GpuMemorySnapshot gpu_memory_snapshot;
 
 	//for printing
 	bool print_gpu_profile = false;
@@ -104,6 +115,27 @@ class RenderingServerDefault : public RenderingServer {
 	void _init();
 	void _finish();
 	void _finalize_main_rendering_device();
+	void _tick();
+	void _pre_draw(bool p_will_draw);
+	void _set_frame_profiling_enabled(bool p_enable);
+	void _set_print_gpu_profile(bool p_enable);
+	uint64_t _read_rendering_info(RSE::RenderingInfo p_info);
+	RID _get_test_cube_on_render_thread();
+	void _get_test_cube_sync(int64_t p_result_address);
+	void _get_default_clear_color_sync(int64_t p_result_address);
+	void _set_default_clear_color_on_render_thread(const Color &p_color);
+	void _query_os_feature_sync(int64_t p_query_address);
+	void _set_debug_generate_wireframes_on_render_thread(bool p_enable);
+	void _sdfgi_set_debug_probe_select_on_render_thread(const Vector3 &p_position, const Vector3 &p_dir);
+	Size2i maximum_viewport_size;
+#ifdef RD_ENABLED
+	RenderingDeviceEnums::DeviceType adapter_type = RenderingDeviceEnums::DEVICE_TYPE_OTHER;
+#endif
+	struct OsFeatureQuery {
+		String feature;
+		bool supported = false;
+	};
+	void _set_physics_interpolation_enabled(bool p_enabled);
 
 	void _free(RID p_rid);
 
@@ -115,13 +147,19 @@ public:
 
 #ifdef DEBUG_CHANGES
 	_FORCE_INLINE_ static void redraw_request() {
-		changes++;
+		RenderingServerDefault *server = static_cast<RenderingServerDefault *>(RenderingServer::get_singleton());
+		if (server != nullptr) {
+			server->change_generation.fetch_add(1, std::memory_order_relaxed);
+		}
 		_changes_changed();
 	}
 
 #else
 	_FORCE_INLINE_ static void redraw_request() {
-		changes++;
+		RenderingServerDefault *server = static_cast<RenderingServerDefault *>(RenderingServer::get_singleton());
+		if (server != nullptr) {
+			server->change_generation.fetch_add(1, std::memory_order_relaxed);
+		}
 	}
 #endif
 
@@ -1205,6 +1243,7 @@ public:
 	virtual void set_frame_profiling_enabled(bool p_enable) override;
 	virtual Vector<RenderingServerTypes::FrameProfileArea> get_frame_profile() override;
 	virtual uint64_t get_frame_profile_frame() override;
+	virtual RenderingServerTypes::RenderFrameProfileSnapshot get_frame_profile_snapshot() override;
 
 	virtual RID get_test_cube() override;
 

@@ -999,6 +999,7 @@ public:
 	virtual void set_frame_profiling_enabled(bool p_enable) = 0;
 	virtual Vector<RenderingServerTypes::FrameProfileArea> get_frame_profile() = 0;
 	virtual uint64_t get_frame_profile_frame() = 0;
+	virtual RenderingServerTypes::RenderFrameProfileSnapshot get_frame_profile_snapshot() = 0;
 
 	virtual double get_frame_setup_time_cpu() const = 0;
 

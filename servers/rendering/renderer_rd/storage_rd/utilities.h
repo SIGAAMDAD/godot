@@ -33,6 +33,8 @@
 #include "core/templates/rid_owner.h"
 #include "servers/rendering/storage/utilities.h"
 
+#include <atomic>
+
 namespace RendererRD {
 
 /* VISIBILITY NOTIFIER */
@@ -55,9 +57,9 @@ private:
 	/* MISC */
 
 	//keep cached since it can be called form any thread
-	uint64_t texture_mem_cache = 0;
-	uint64_t buffer_mem_cache = 0;
-	uint64_t total_mem_cache = 0;
+	std::atomic<uint64_t> texture_mem_cache{ 0 };
+	std::atomic<uint64_t> buffer_mem_cache{ 0 };
+	std::atomic<uint64_t> total_mem_cache{ 0 };
 
 public:
 	static Utilities *get_singleton() { return singleton; }

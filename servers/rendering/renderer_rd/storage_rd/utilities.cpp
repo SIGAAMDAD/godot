@@ -297,18 +297,18 @@ bool Utilities::has_os_feature(const String &p_feature) const {
 }
 
 void Utilities::update_memory_info() {
-	texture_mem_cache = RenderingDevice::get_singleton()->get_memory_usage(RenderingDevice::MEMORY_TEXTURES);
-	buffer_mem_cache = RenderingDevice::get_singleton()->get_memory_usage(RenderingDevice::MEMORY_BUFFERS);
-	total_mem_cache = RenderingDevice::get_singleton()->get_memory_usage(RenderingDevice::MEMORY_TOTAL);
+	texture_mem_cache.store(RenderingDevice::get_singleton()->get_memory_usage(RenderingDevice::MEMORY_TEXTURES), std::memory_order_release);
+	buffer_mem_cache.store(RenderingDevice::get_singleton()->get_memory_usage(RenderingDevice::MEMORY_BUFFERS), std::memory_order_release);
+	total_mem_cache.store(RenderingDevice::get_singleton()->get_memory_usage(RenderingDevice::MEMORY_TOTAL), std::memory_order_release);
 }
 
 uint64_t Utilities::get_rendering_info(RSE::RenderingInfo p_info) {
 	if (p_info == RSE::RENDERING_INFO_TEXTURE_MEM_USED) {
-		return texture_mem_cache;
+		return texture_mem_cache.load(std::memory_order_acquire);
 	} else if (p_info == RSE::RENDERING_INFO_BUFFER_MEM_USED) {
-		return buffer_mem_cache;
+		return buffer_mem_cache.load(std::memory_order_acquire);
 	} else if (p_info == RSE::RENDERING_INFO_VIDEO_MEM_USED) {
-		return total_mem_cache;
+		return total_mem_cache.load(std::memory_order_acquire);
 	}
 	return 0;
 }

@@ -130,6 +130,18 @@ struct FrameProfileArea {
 	double cpu_msec;
 };
 
+struct RenderFrameProfileSnapshot {
+	uint64_t frame_id = 0;
+	Vector<FrameProfileArea> areas;
+};
+
+struct GpuMemorySnapshot {
+	uint64_t textures = 0;
+	uint64_t buffers = 0;
+	uint64_t total = 0;
+	uint64_t frame_id = 0;
+};
+
 /* COMPOSITOR */
 
 struct BlitToScreen {

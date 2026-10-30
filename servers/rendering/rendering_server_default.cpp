@@ -44,10 +44,6 @@
 #include "servers/xr/xr_server.h"
 #endif
 
-// careful, these may run in different threads than the rendering server
-
-int RenderingServerDefault::changes = 0;
-
 /* FREE */
 
 void RenderingServerDefault::_free(RID p_rid) {
@@ -165,6 +161,11 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
 	}
 
 	frame_profile_frame = RSG::utilities->get_captured_timestamps_frame();
+	{
+		MutexLock lock(profile_snapshot_mutex);
+		profile_snapshot.frame_id = frame_profile_frame;
+		profile_snapshot.areas = frame_profile;
+	}
 
 	if (print_gpu_profile) {
 		GodotProfileZoneGrouped(_profile_zone, "gpu_profile");
@@ -212,6 +213,22 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step) {
 
 	GodotProfileZoneGrouped(_profile_zone, "memory_info");
 	RSG::utilities->update_memory_info();
+	uint64_t updated_info[RSE::RENDERING_INFO_MAX] = {};
+	for (int i = 0; i < RSE::RENDERING_INFO_MAX; i++) {
+		updated_info[i] = _read_rendering_info(RSE::RenderingInfo(i));
+	}
+	{
+		MutexLock lock(rendering_info_mutex);
+		for (int i = 0; i < RSE::RENDERING_INFO_MAX; i++) {
+			rendering_info_snapshot[i] = updated_info[i];
+		}
+		gpu_memory_snapshot.textures = updated_info[RSE::RENDERING_INFO_TEXTURE_MEM_USED];
+		gpu_memory_snapshot.buffers = updated_info[RSE::RENDERING_INFO_BUFFER_MEM_USED];
+		gpu_memory_snapshot.total = updated_info[RSE::RENDERING_INFO_VIDEO_MEM_USED];
+		gpu_memory_snapshot.frame_id = frame_profile_frame;
+		published_frame_setup_time = frame_setup_time;
+		rendering_info_available = true;
+	}
 	GodotMemoryTracking::publish_render_frame_us(OS::get_singleton()->get_ticks_usec() - render_frame_begin_us);
 }
 
@@ -233,11 +250,12 @@ void RenderingServerDefault::_run_post_draw_steps() {
 }
 
 double RenderingServerDefault::get_frame_setup_time_cpu() const {
-	return frame_setup_time;
+	MutexLock lock(rendering_info_mutex);
+	return published_frame_setup_time;
 }
 
 bool RenderingServerDefault::has_changed() const {
-	return changes > 0;
+	return change_generation.load(std::memory_order_acquire) != last_submitted_generation;
 }
 
 void RenderingServerDefault::_init() {
@@ -260,9 +278,19 @@ void RenderingServerDefault::_init() {
 	RSG::fog = RSG::rasterizer->get_fog();
 	RSG::canvas_render = RSG::rasterizer->get_canvas();
 	sr->set_scene_render(RSG::rasterizer->get_scene());
+	renderer_resources_active.store(true, std::memory_order_release);
+	maximum_viewport_size = RSG::utilities->get_maximum_viewport_size();
+#ifdef RD_ENABLED
+	adapter_type = RSG::utilities->get_video_adapter_type();
+#endif
 }
 
 void RenderingServerDefault::_finish() {
+	renderer_resources_active.store(false, std::memory_order_release);
+	{
+		MutexLock lock(profile_snapshot_mutex);
+		profile_snapshot = RenderingServerTypes::RenderFrameProfileSnapshot();
+	}
 	if (test_cube.is_valid()) {
 		free_rid(test_cube);
 	}
@@ -366,6 +394,15 @@ void RenderingServerDefault::finish() {
 /* STATUS INFORMATION */
 
 uint64_t RenderingServerDefault::get_rendering_info(RSE::RenderingInfo p_info) {
+	ERR_FAIL_INDEX_V(p_info, RSE::RENDERING_INFO_MAX, 0);
+	if (renderer_resources_active.load(std::memory_order_acquire) && Thread::get_caller_id() == server_thread && RSG::utilities != nullptr) {
+		return _read_rendering_info(p_info);
+	}
+	MutexLock lock(rendering_info_mutex);
+	return rendering_info_available ? rendering_info_snapshot[p_info] : 0;
+}
+
+uint64_t RenderingServerDefault::_read_rendering_info(RSE::RenderingInfo p_info) {
 	if (p_info == RSE::RENDERING_INFO_TOTAL_OBJECTS_IN_FRAME) {
 		return RSG::viewport->get_total_objects_drawn();
 	} else if (p_info == RSE::RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME) {
@@ -388,30 +425,58 @@ uint64_t RenderingServerDefault::get_rendering_info(RSE::RenderingInfo p_info) {
 
 #ifdef RD_ENABLED
 RenderingDeviceEnums::DeviceType RenderingServerDefault::get_video_adapter_type() const {
-	return RSG::utilities->get_video_adapter_type();
+	return adapter_type;
 }
 #endif // RD_ENABLED
 
-void RenderingServerDefault::set_frame_profiling_enabled(bool p_enable) {
+void RenderingServerDefault::_set_frame_profiling_enabled(bool p_enable) {
 	RSG::utilities->capturing_timestamps = p_enable;
 }
 
+void RenderingServerDefault::set_frame_profiling_enabled(bool p_enable) {
+	call_on_render_thread(callable_mp(this, &RenderingServerDefault::_set_frame_profiling_enabled).bind(p_enable));
+}
+
+RenderingServerTypes::RenderFrameProfileSnapshot RenderingServerDefault::get_frame_profile_snapshot() {
+	MutexLock lock(profile_snapshot_mutex);
+	return profile_snapshot;
+}
+
 uint64_t RenderingServerDefault::get_frame_profile_frame() {
-	return frame_profile_frame;
+	return get_frame_profile_snapshot().frame_id;
 }
 
 Vector<RenderingServerTypes::FrameProfileArea> RenderingServerDefault::get_frame_profile() {
-	return frame_profile;
+	return get_frame_profile_snapshot().areas;
 }
 
 /* TESTING */
 
+void RenderingServerDefault::_get_default_clear_color_sync(int64_t p_result_address) {
+	Color *result = reinterpret_cast<Color *>(uintptr_t(uint64_t(p_result_address)));
+	*result = RSG::texture_storage->get_default_clear_color();
+}
+
 Color RenderingServerDefault::get_default_clear_color() {
-	return RSG::texture_storage->get_default_clear_color();
+	Color result;
+	if (!renderer_resources_active.load(std::memory_order_acquire)) {
+		return result;
+	}
+	if (Thread::get_caller_id() == server_thread) {
+		command_queue.flush_if_pending();
+		_get_default_clear_color_sync(int64_t(uintptr_t(&result)));
+	} else {
+		call_on_render_thread_sync(callable_mp(this, &RenderingServerDefault::_get_default_clear_color_sync).bind(int64_t(uintptr_t(&result))));
+	}
+	return result;
+}
+
+void RenderingServerDefault::_set_default_clear_color_on_render_thread(const Color &p_color) {
+	RSG::texture_storage->set_default_clear_color(p_color);
 }
 
 void RenderingServerDefault::set_default_clear_color(const Color &p_color) {
-	RSG::texture_storage->set_default_clear_color(p_color);
+	call_on_render_thread(callable_mp(this, &RenderingServerDefault::_set_default_clear_color_on_render_thread).bind(p_color));
 }
 
 #ifndef DISABLE_DEPRECATED
@@ -420,32 +485,75 @@ bool RenderingServerDefault::has_feature(RSE::Features p_feature) const {
 }
 #endif
 
-void RenderingServerDefault::sdfgi_set_debug_probe_select(const Vector3 &p_position, const Vector3 &p_dir) {
+void RenderingServerDefault::_sdfgi_set_debug_probe_select_on_render_thread(const Vector3 &p_position, const Vector3 &p_dir) {
 	RSG::scene->sdfgi_set_debug_probe_select(p_position, p_dir);
 }
 
-void RenderingServerDefault::set_print_gpu_profile(bool p_enable) {
+void RenderingServerDefault::sdfgi_set_debug_probe_select(const Vector3 &p_position, const Vector3 &p_dir) {
+	call_on_render_thread(callable_mp(this, &RenderingServerDefault::_sdfgi_set_debug_probe_select_on_render_thread).bind(p_position, p_dir));
+}
+
+void RenderingServerDefault::_set_print_gpu_profile(bool p_enable) {
 	RSG::utilities->capturing_timestamps = p_enable;
 	print_gpu_profile = p_enable;
 }
 
-RID RenderingServerDefault::get_test_cube() {
+void RenderingServerDefault::set_print_gpu_profile(bool p_enable) {
+	call_on_render_thread(callable_mp(this, &RenderingServerDefault::_set_print_gpu_profile).bind(p_enable));
+}
+
+RID RenderingServerDefault::_get_test_cube_on_render_thread() {
 	if (!test_cube.is_valid()) {
 		test_cube = _make_test_cube();
 	}
 	return test_cube;
 }
 
+void RenderingServerDefault::_get_test_cube_sync(int64_t p_result_address) {
+	RID *result = reinterpret_cast<RID *>(uintptr_t(uint64_t(p_result_address)));
+	*result = _get_test_cube_on_render_thread();
+}
+
+RID RenderingServerDefault::get_test_cube() {
+	if (!renderer_resources_active.load(std::memory_order_acquire)) {
+		return RID();
+	}
+	if (Thread::get_caller_id() == server_thread) {
+		command_queue.flush_if_pending();
+		return _get_test_cube_on_render_thread();
+	}
+	RID result;
+	call_on_render_thread_sync(callable_mp(this, &RenderingServerDefault::_get_test_cube_sync).bind(int64_t(uintptr_t(&result))));
+	return result;
+}
+
+void RenderingServerDefault::_query_os_feature_sync(int64_t p_query_address) {
+	OsFeatureQuery *query = reinterpret_cast<OsFeatureQuery *>(uintptr_t(uint64_t(p_query_address)));
+	query->supported = RSG::utilities != nullptr && RSG::utilities->has_os_feature(query->feature);
+}
+
 bool RenderingServerDefault::has_os_feature(const String &p_feature) const {
-	if (RSG::utilities) {
-		return RSG::utilities->has_os_feature(p_feature);
-	} else {
+	if (!renderer_resources_active.load(std::memory_order_acquire)) {
 		return false;
 	}
+	OsFeatureQuery query;
+	query.feature = p_feature;
+	RenderingServerDefault *server = const_cast<RenderingServerDefault *>(this);
+	if (Thread::get_caller_id() == server_thread) {
+		server->command_queue.flush_if_pending();
+		server->_query_os_feature_sync(int64_t(uintptr_t(&query)));
+	} else {
+		server->call_on_render_thread_sync(callable_mp(server, &RenderingServerDefault::_query_os_feature_sync).bind(int64_t(uintptr_t(&query))));
+	}
+	return query.supported;
+}
+
+void RenderingServerDefault::_set_debug_generate_wireframes_on_render_thread(bool p_enable) {
+	RSG::utilities->set_debug_generate_wireframes(p_enable);
 }
 
 void RenderingServerDefault::set_debug_generate_wireframes(bool p_generate) {
-	RSG::utilities->set_debug_generate_wireframes(p_generate);
+	call_on_render_thread(callable_mp(this, &RenderingServerDefault::_set_debug_generate_wireframes_on_render_thread).bind(p_generate));
 }
 
 bool RenderingServerDefault::is_low_end() const {
@@ -453,11 +561,7 @@ bool RenderingServerDefault::is_low_end() const {
 }
 
 Size2i RenderingServerDefault::get_maximum_viewport_size() const {
-	if (RSG::utilities) {
-		return RSG::utilities->get_maximum_viewport_size();
-	} else {
-		return Size2i();
-	}
+	return maximum_viewport_size;
 }
 
 void RenderingServerDefault::_assign_mt_ids(WorkerThreadPool::TaskID p_pump_task_id) {
@@ -490,9 +594,20 @@ void RenderingServerDefault::_thread_loop() {
 
 /* INTERPOLATION */
 
-void RenderingServerDefault::set_physics_interpolation_enabled(bool p_enabled) {
+void RenderingServerDefault::_set_physics_interpolation_enabled(bool p_enabled) {
 	RSG::canvas->set_physics_interpolation_enabled(p_enabled);
 	RSG::scene->set_physics_interpolation_enabled(p_enabled);
+}
+
+void RenderingServerDefault::set_physics_interpolation_enabled(bool p_enabled) {
+	if (create_thread && Thread::get_caller_id() != server_thread) {
+		command_queue.push(this, &RenderingServerDefault::_set_physics_interpolation_enabled, p_enabled);
+	} else {
+		if (create_thread) {
+			command_queue.flush_if_pending();
+		}
+		_set_physics_interpolation_enabled(p_enabled);
+	}
 }
 
 /* EVENT QUEUING */
@@ -507,9 +622,11 @@ void RenderingServerDefault::sync() {
 
 void RenderingServerDefault::draw(bool p_present, double frame_step) {
 	ERR_FAIL_COND_MSG(!Thread::is_main_thread(), "Manually triggering the draw function from the RenderingServer can only be done on the main thread. Call this function from the main thread or use call_deferred().");
-	// Needs to be done before changes is reset to 0, to not force the editor to redraw.
+	// Sample before frame_pre_draw so notifications from callbacks stay pending.
+	const uint64_t submitted_generation = change_generation.load(std::memory_order_acquire);
 	RS::get_singleton()->emit_signal(SNAME("frame_pre_draw"));
-	changes = 0;
+	// The generation is acknowledged only at the draw submission boundary.
+	last_submitted_generation = submitted_generation;
 	if (create_thread) {
 		command_queue.push(this, &RenderingServerDefault::_draw, p_present, frame_step);
 	} else {
@@ -517,13 +634,35 @@ void RenderingServerDefault::draw(bool p_present, double frame_step) {
 	}
 }
 
-void RenderingServerDefault::tick() {
+void RenderingServerDefault::_tick() {
 	RSG::canvas->tick();
 	RSG::scene->tick();
 }
 
-void RenderingServerDefault::pre_draw(bool p_will_draw) {
+void RenderingServerDefault::tick() {
+	if (create_thread && Thread::get_caller_id() != server_thread) {
+		command_queue.push(this, &RenderingServerDefault::_tick);
+	} else {
+		if (create_thread) {
+			command_queue.flush_if_pending();
+		}
+		_tick();
+	}
+}
+
+void RenderingServerDefault::_pre_draw(bool p_will_draw) {
 	RSG::scene->pre_draw(p_will_draw);
+}
+
+void RenderingServerDefault::pre_draw(bool p_will_draw) {
+	if (create_thread && Thread::get_caller_id() != server_thread) {
+		command_queue.push(this, &RenderingServerDefault::_pre_draw, p_will_draw);
+	} else {
+		if (create_thread) {
+			command_queue.flush_if_pending();
+		}
+		_pre_draw(p_will_draw);
+	}
 }
 
 void RenderingServerDefault::_call_on_render_thread(const Callable &p_callable) {

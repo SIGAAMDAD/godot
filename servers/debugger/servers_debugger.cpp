@@ -378,14 +378,14 @@ public:
 	void add(const Array &p_data) {}
 
 	void tick(double p_frame_time, double p_process_time, double p_physics_time, double p_physics_frame_time) {
-		Vector<RenderingServerTypes::FrameProfileArea> profile_areas = RS::get_singleton()->get_frame_profile();
+		const RenderingServerTypes::RenderFrameProfileSnapshot profile = RS::get_singleton()->get_frame_profile_snapshot();
 		ServersDebugger::VisualProfilerFrame frame;
-		if (!profile_areas.size()) {
+		if (!profile.areas.size()) {
 			return;
 		}
 
-		frame.frame_number = RS::get_singleton()->get_frame_profile_frame();
-		frame.areas.append_array(profile_areas);
+		frame.frame_number = profile.frame_id;
+		frame.areas.append_array(profile.areas);
 		EngineDebugger::get_singleton()->send_message("visual:profile_frame", frame.serialize());
 	}
 };
