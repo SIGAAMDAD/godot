@@ -450,9 +450,26 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			result.push_back(int64_t(records[i].bytes));
 			result.push_back(int64_t(records[i].category));
 			result.push_back(int64_t(records[i].generation));
+			result.push_back(int64_t(records[i].stack_id));
 		}
 		EngineDebugger::get_singleton()->send_message(logical_records ? "servers:memprof_gpu_logical_records" :
 				gpu_records ? "servers:memprof_gpu_records" : "servers:memprof_records", result);
+	} else if (p_cmd == "memprof_stack") {
+		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
+			return ERR_INVALID_PARAMETER;
+		}
+		const int64_t capture = p_data[0];
+		const int64_t stack_id = p_data[1];
+		if (capture != int64_t(GodotMemoryTracking::summary().capture_id) || stack_id < 1 || stack_id > 8192) {
+			return ERR_INVALID_PARAMETER;
+		}
+		uintptr_t frames[12] = {};
+		const size_t count = GodotMemoryTracking::callstack(uint32_t(stack_id), frames, 12);
+		Array result = { capture, stack_id, int64_t(count) };
+		for (size_t i = 0; i < count; ++i) {
+			result.push_back(int64_t(frames[i]));
+		}
+		EngineDebugger::get_singleton()->send_message("servers:memprof_stack", result);
 	} else if (p_cmd == "memprof_trace_chunk") {
 		if (p_data.size() != 2 || p_data[0].get_type() != Variant::INT || p_data[1].get_type() != Variant::INT) {
 			return ERR_INVALID_PARAMETER;
@@ -526,6 +543,7 @@ Error ServersDebugger::_capture(void *p_user, const String &p_cmd, const Array &
 			result.push_back(int64_t(ev[i].category));
 			result.push_back(int64_t(ev[i].kind));
 			result.push_back(ev[i].gpu);
+			result.push_back(int64_t(ev[i].stack_id));
 		}
 		EngineDebugger::get_singleton()->send_message("servers:memprof_events", result);
 	} else if (p_cmd == "draw") { // Forced redraw.
