@@ -416,6 +416,8 @@ void EditorPerformanceProfiler::_notification(int p_what) {
 			record("editor:self/native_cpu", perf->get_monitor(Performance::MEMORY_CAPTURE_NATIVE_LIVE));
 			record("editor:self/gpu_backing", perf->get_monitor(Performance::MEMORY_CAPTURE_GPU_BACKING_LIVE));
 			record("editor:self/gpu_logical", perf->get_monitor(Performance::MEMORY_CAPTURE_GPU_LOGICAL_LIVE));
+			record("editor:self/gpu_reserved", perf->get_monitor(Performance::MEMORY_CAPTURE_GPU_RESERVED));
+			record("editor:self/gpu_budget", perf->get_monitor(Performance::MEMORY_CAPTURE_GPU_BUDGET));
 			record("editor:self/event_drops", perf->get_monitor(Performance::MEMORY_CAPTURE_EVENT_DROPS));
 			monitor_draw->queue_redraw();
 		} break;
@@ -496,6 +498,8 @@ EditorPerformanceProfiler::EditorPerformanceProfiler() {
 	monitors.insert("editor:self/native_cpu", Monitor("Captured native CPU bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
 	monitors.insert("editor:self/gpu_backing", Monitor("Captured GPU backing bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
 	monitors.insert("editor:self/gpu_logical", Monitor("Captured GPU logical RID bytes", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
+	monitors.insert("editor:self/gpu_reserved", Monitor("GPU reserved backing bytes (when available)", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
+	monitors.insert("editor:self/gpu_budget", Monitor("GPU device budget bytes (when available)", editor_base, -1, Performance::MONITOR_TYPE_MEMORY, nullptr));
 	monitors.insert("editor:self/event_drops", Monitor("Dropped capture events", editor_base, -1, Performance::MONITOR_TYPE_QUANTITY, nullptr));
 	set_process(true);
 
