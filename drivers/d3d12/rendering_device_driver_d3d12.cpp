@@ -1020,6 +1020,7 @@ RDD::BufferID RenderingDeviceDriverD3D12::buffer_create(uint64_t p_size, BitFiel
 	buf_info->device_address_uav_alloc = device_address_uav_alloc;
 	buf_info->flags.is_dynamic = p_usage.has_flag(BUFFER_USAGE_DYNAMIC_PERSISTENT_BIT);
 	if (buf_info->owner_info.allocation) {
+		GodotMemoryTracking::ScopeCategory category(GodotMemoryTracking::CATEGORY_D3D12_BUFFER);
 		GodotMemoryTracking::record_gpu_alloc(buf_info->owner_info.allocation.Get(), buf_info->owner_info.allocation->GetSize());
 	}
 
@@ -1643,6 +1644,7 @@ RDD::TextureID RenderingDeviceDriverD3D12::texture_create(const TextureFormat &p
 	tex_info->view_descs.srv = srv_desc;
 	tex_info->view_descs.uav = uav_desc;
 	if (tex_info->owner_info.allocation) {
+		GodotMemoryTracking::ScopeCategory category(GodotMemoryTracking::CATEGORY_D3D12_TEXTURE);
 		GodotMemoryTracking::record_gpu_alloc(tex_info->owner_info.allocation.Get(), tex_info->owner_info.allocation->GetSize());
 	}
 
