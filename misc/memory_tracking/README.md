@@ -12,6 +12,21 @@ clang++ -std=c++17 -Wall -Wextra -Werror -pthread -I. \
 ./memory_tracker_test
 ```
 
+Standalone editor render-thread synchronization tests (not engine source units):
+
+```sh
+clang++ -std=c++17 -Wall -Wextra -Werror -pthread \
+  misc/memory_tracking/test_editor_render_thread_contracts.cpp -o editor_render_thread_contracts
+./editor_render_thread_contracts
+```
+
+On a native Windows/Vulkan GUI host, exercise the editor window lifecycle in both safe and
+experimental separate-thread modes (with a real project and built editor executable):
+
+```powershell
+python tests/servers/rendering/editor_thread_windows_stress.py --editor C:\Godot\godot.windows.editor.exe --project C:\Project --output C:\bench --cycles 10
+```
+
 Reference benchmark data-contract check:
 
 ```sh
