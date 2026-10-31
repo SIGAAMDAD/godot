@@ -321,7 +321,7 @@ double RenderingServerDefault::get_frame_setup_time_cpu() const {
 }
 
 bool RenderingServerDefault::has_changed() const {
-	return change_generation.load(std::memory_order_acquire) != last_submitted_generation;
+	return change_generation.load(std::memory_order_acquire) != last_submitted_generation.load(std::memory_order_acquire);
 }
 
 void RenderingServerDefault::_init() {
@@ -735,7 +735,7 @@ void RenderingServerDefault::draw(bool p_present, double frame_step) {
 	const uint64_t submitted_generation = change_generation.load(std::memory_order_acquire);
 	RS::get_singleton()->emit_signal(SNAME("frame_pre_draw"));
 	// The generation is acknowledged only at the draw submission boundary.
-	last_submitted_generation = submitted_generation;
+	last_submitted_generation.store(submitted_generation, std::memory_order_release);
 	if (create_thread) {
 		command_queue.push(this, &RenderingServerDefault::_draw, p_present, frame_step, frame_id);
 	} else {

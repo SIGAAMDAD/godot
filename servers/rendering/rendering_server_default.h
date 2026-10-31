@@ -67,7 +67,7 @@ class RenderingServerDefault : public RenderingServer {
 
 	std::atomic<bool> renderer_resources_active{ false };
 	std::atomic<uint64_t> change_generation{ 0 };
-	uint64_t last_submitted_generation = 0;
+	std::atomic<uint64_t> last_submitted_generation{ 0 };
 	RID test_cube;
 
 	List<Callable> frame_drawn_callbacks;

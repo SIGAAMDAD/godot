@@ -22,7 +22,8 @@ def verify():
     assert "CommandAdmissionState::DRAINING" in rs
     assert "request->completed.wait()" in rs
     assert "std::atomic<uint64_t> change_generation" in rs_h
-    assert "last_submitted_generation = submitted_generation" in rs
+    assert "std::atomic<uint64_t> last_submitted_generation" in rs_h
+    assert "last_submitted_generation.store(submitted_generation, std::memory_order_release)" in rs
     assert "get_frame_profile_snapshot()" in dbg
     assert "_run_gpu_window_op(WindowGpuOpKind::RELEASE" in win
     assert win.index("temp_relock();", win.index("WindowGpuOpKind::RELEASE, p_window")) < win.index("ERR_FAIL_COND_MSG(err != OK", win.index("WindowGpuOpKind::RELEASE, p_window"))
