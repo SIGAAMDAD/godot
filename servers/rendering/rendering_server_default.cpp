@@ -684,6 +684,10 @@ void RenderingServerDefault::_set_physics_interpolation_enabled(bool p_enabled) 
 }
 
 void RenderingServerDefault::set_physics_interpolation_enabled(bool p_enabled) {
+	ResourceOperationGuard resource_guard(this);
+	if (!resource_guard) {
+		return;
+	}
 	if (create_thread && Thread::get_caller_id() != server_thread) {
 		command_queue.push(this, &RenderingServerDefault::_set_physics_interpolation_enabled, p_enabled);
 	} else {
@@ -745,6 +749,10 @@ void RenderingServerDefault::_tick() {
 }
 
 void RenderingServerDefault::tick() {
+	ResourceOperationGuard resource_guard(this);
+	if (!resource_guard) {
+		return;
+	}
 	if (create_thread && Thread::get_caller_id() != server_thread) {
 		command_queue.push(this, &RenderingServerDefault::_tick);
 	} else {
@@ -760,6 +768,10 @@ void RenderingServerDefault::_pre_draw(bool p_will_draw) {
 }
 
 void RenderingServerDefault::pre_draw(bool p_will_draw) {
+	ResourceOperationGuard resource_guard(this);
+	if (!resource_guard) {
+		return;
+	}
 	if (create_thread && Thread::get_caller_id() != server_thread) {
 		command_queue.push(this, &RenderingServerDefault::_pre_draw, p_will_draw);
 	} else {
