@@ -46,7 +46,6 @@
 #include "core/io/marshalls.h"
 #include "core/io/xml_parser.h"
 #include "core/object/callable_mp.h"
-#include "servers/rendering/rendering_server.h"
 #include "core/os/main_loop.h"
 #include "core/os/os.h"
 #include "core/version.h"
@@ -56,6 +55,7 @@
 #include "servers/display/accessibility_server.h"
 #include "servers/rendering/dummy/rasterizer_dummy.h"
 #include "servers/rendering/renderer_rd/renderer_compositor_rd.h"
+#include "servers/rendering/rendering_server.h"
 
 #ifdef SDL_ENABLED
 #include "drivers/sdl/joypad_sdl.h"
@@ -1987,8 +1987,8 @@ DisplayServerEnums::WindowID DisplayServerWindows::create_sub_window(DisplayServ
 	if (rendering_device && rendering_driver == "vulkan") {
 		const uint64_t generation = _register_gpu_window(window_id);
 		_thread_safe_method_.temp_unlock();
-		const Error err = _run_gpu_window_op(WindowGpuOpKind::CREATE, window_id, generation);
-		if (err != OK) {
+		const Error gpu_err = _run_gpu_window_op(WindowGpuOpKind::CREATE, window_id, generation);
+		if (gpu_err != OK) {
 			_invalidate_gpu_window(window_id);
 			_thread_safe_method_.temp_relock();
 			if (rendering_context) {
