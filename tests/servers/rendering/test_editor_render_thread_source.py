@@ -22,6 +22,14 @@ def verify():
     assert "CommandAdmissionState::DRAINING" in rs
     assert "request->completed.wait()" in rs
     assert "std::atomic<uint64_t> change_generation" in rs_h
+    for query in ("texture_debug_usage", "mesh_debug_usage"):
+        start = rs_h.index(f"virtual void {query}(")
+        body = rs_h[start : rs_h.index("\n\t}", start)]
+        assert "ResourceOperationGuard resource_guard(this)" in body
+        assert "command_queue.push_and_sync" in body
+    shutdown = rs[rs.index("void RenderingServerDefault::_finish()") : rs.index("void RenderingServerDefault::_finalize_main_rendering_device()")]
+    assert "rendering_info_available = false" in shutdown
+    assert "gpu_memory_snapshot = RenderingServerTypes::GpuMemorySnapshot()" in shutdown
     assert "std::atomic<uint64_t> last_submitted_generation" in rs_h
     assert "last_submitted_generation.store(submitted_generation, std::memory_order_release)" in rs
     assert "get_frame_profile_snapshot()" in dbg

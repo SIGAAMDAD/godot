@@ -361,6 +361,15 @@ void RenderingServerDefault::_finish() {
 	}
 	renderer_resources_active.store(false, std::memory_order_release);
 	{
+		MutexLock lock(rendering_info_mutex);
+		for (int i = 0; i < RSE::RENDERING_INFO_MAX; i++) {
+			rendering_info_snapshot[i] = 0;
+		}
+		rendering_info_available = false;
+		gpu_memory_snapshot = RenderingServerTypes::GpuMemorySnapshot();
+		published_frame_setup_time = 0;
+	}
+	{
 		MutexLock lock(profile_snapshot_mutex);
 		profile_snapshot = RenderingServerTypes::RenderFrameProfileSnapshot();
 	}

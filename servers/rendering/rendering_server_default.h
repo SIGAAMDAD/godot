@@ -32,10 +32,10 @@
 
 #include "core/object/callable_mp.h"
 #include "core/object/worker_thread_pool.h"
-#include "core/os/thread.h"
 #include "core/os/condition_variable.h"
 #include "core/os/mutex.h"
 #include "core/os/semaphore.h"
+#include "core/os/thread.h"
 #include "core/templates/command_queue_mt.h"
 #include "core/templates/hash_map.h"
 #include "servers/rendering/renderer_canvas_cull.h"
@@ -110,7 +110,9 @@ class RenderingServerDefault : public RenderingServer {
 	bool exit = false;
 	bool create_thread = false;
 
-	enum class CommandAdmissionState : uint8_t { STOPPED, RUNNING, DRAINING };
+	enum class CommandAdmissionState : uint8_t { STOPPED,
+		RUNNING,
+		DRAINING };
 	BinaryMutex command_admission_mutex;
 	CommandAdmissionState command_admission = CommandAdmissionState::STOPPED;
 	ConditionVariable resource_operations_drained;
@@ -220,7 +222,9 @@ public:
 #define FUNCRIDSPLIT_GUARDED(m_type) \
 	virtual RID m_type##_create() override { \
 		ResourceOperationGuard resource_guard(this); \
-		if (!resource_guard) { return RID(); } \
+		if (!resource_guard) { \
+			return RID(); \
+		} \
 		RID ret = server_name->m_type##_allocate(); \
 		if (ASYNC_COND_PUSH) { \
 			command_queue.push(server_name, &ServerName::m_type##_initialize, ret); \
@@ -252,7 +256,9 @@ public:
 #define FUNCRIDTEX0(m_type) \
 	virtual RID m_type##_create() override { \
 		ResourceOperationGuard resource_guard(this); \
-		if (!resource_guard) { return RID(); } \
+		if (!resource_guard) { \
+			return RID(); \
+		} \
 		RID ret = RSG::texture_storage->texture_allocate(); \
 		if (Thread::get_caller_id() == server_thread || RSG::rasterizer->can_create_resources_async()) { \
 			RSG::texture_storage->m_type##_initialize(ret); \
@@ -265,7 +271,9 @@ public:
 #define FUNCRIDTEX1(m_type, m_type1) \
 	virtual RID m_type##_create(m_type1 p1) override { \
 		ResourceOperationGuard resource_guard(this); \
-		if (!resource_guard) { return RID(); } \
+		if (!resource_guard) { \
+			return RID(); \
+		} \
 		RID ret = RSG::texture_storage->texture_allocate(); \
 		if (Thread::get_caller_id() == server_thread || RSG::rasterizer->can_create_resources_async()) { \
 			RSG::texture_storage->m_type##_initialize(ret, p1); \
@@ -278,7 +286,9 @@ public:
 #define FUNCRIDTEX2(m_type, m_type1, m_type2) \
 	virtual RID m_type##_create(m_type1 p1, m_type2 p2) override { \
 		ResourceOperationGuard resource_guard(this); \
-		if (!resource_guard) { return RID(); } \
+		if (!resource_guard) { \
+			return RID(); \
+		} \
 		RID ret = RSG::texture_storage->texture_allocate(); \
 		if (Thread::get_caller_id() == server_thread || RSG::rasterizer->can_create_resources_async()) { \
 			RSG::texture_storage->m_type##_initialize(ret, p1, p2); \
@@ -291,7 +301,9 @@ public:
 #define FUNCRIDTEX3(m_type, m_type1, m_type2, m_type3) \
 	virtual RID m_type##_create(m_type1 p1, m_type2 p2, m_type3 p3) override { \
 		ResourceOperationGuard resource_guard(this); \
-		if (!resource_guard) { return RID(); } \
+		if (!resource_guard) { \
+			return RID(); \
+		} \
 		RID ret = RSG::texture_storage->texture_allocate(); \
 		if (Thread::get_caller_id() == server_thread || RSG::rasterizer->can_create_resources_async()) { \
 			RSG::texture_storage->m_type##_initialize(ret, p1, p2, p3); \
@@ -304,7 +316,9 @@ public:
 #define FUNCRIDTEX4(m_type, m_type1, m_type2, m_type3, m_type4) \
 	virtual RID m_type##_create(m_type1 p1, m_type2 p2, m_type3 p3, m_type4 p4) override { \
 		ResourceOperationGuard resource_guard(this); \
-		if (!resource_guard) { return RID(); } \
+		if (!resource_guard) { \
+			return RID(); \
+		} \
 		RID ret = RSG::texture_storage->texture_allocate(); \
 		if (Thread::get_caller_id() == server_thread || RSG::rasterizer->can_create_resources_async()) { \
 			RSG::texture_storage->m_type##_initialize(ret, p1, p2, p3, p4); \
@@ -317,7 +331,9 @@ public:
 #define FUNCRIDTEX5(m_type, m_type1, m_type2, m_type3, m_type4, m_type5) \
 	virtual RID m_type##_create(m_type1 p1, m_type2 p2, m_type3 p3, m_type4 p4, m_type5 p5) override { \
 		ResourceOperationGuard resource_guard(this); \
-		if (!resource_guard) { return RID(); } \
+		if (!resource_guard) { \
+			return RID(); \
+		} \
 		RID ret = RSG::texture_storage->texture_allocate(); \
 		if (Thread::get_caller_id() == server_thread || RSG::rasterizer->can_create_resources_async()) { \
 			RSG::texture_storage->m_type##_initialize(ret, p1, p2, p3, p4, p5); \
@@ -330,7 +346,9 @@ public:
 #define FUNCRIDTEX6(m_type, m_type1, m_type2, m_type3, m_type4, m_type5, m_type6) \
 	virtual RID m_type##_create(m_type1 p1, m_type2 p2, m_type3 p3, m_type4 p4, m_type5 p5, m_type6 p6) override { \
 		ResourceOperationGuard resource_guard(this); \
-		if (!resource_guard) { return RID(); } \
+		if (!resource_guard) { \
+			return RID(); \
+		} \
 		RID ret = RSG::texture_storage->texture_allocate(); \
 		if (Thread::get_caller_id() == server_thread || RSG::rasterizer->can_create_resources_async()) { \
 			RSG::texture_storage->m_type##_initialize(ret, p1, p2, p3, p4, p5, p6); \
@@ -402,7 +420,21 @@ public:
 
 	FUNC1RC(Image::Format, texture_get_format, RID)
 
-	FUNC1S(texture_debug_usage, List<RenderingServerTypes::TextureInfo> *)
+	virtual void texture_debug_usage(List<RenderingServerTypes::TextureInfo> *p_list) override {
+		ResourceOperationGuard resource_guard(this);
+		if (!resource_guard) {
+			return;
+		}
+		redraw_request();
+		if (Thread::get_caller_id() != server_thread) {
+			command_queue.push_and_sync(RSG::texture_storage, &RendererTextureStorage::texture_debug_usage, p_list);
+			SYNC_DEBUG
+			MAIN_THREAD_SYNC_CHECK
+		} else {
+			command_queue.flush_if_pending();
+			RSG::texture_storage->texture_debug_usage(p_list);
+		}
+	}
 
 	FUNC2(texture_set_force_redraw_if_visible, RID, bool)
 	FUNCRIDTEX2(texture_rd, const RID &, const RSE::TextureLayeredType)
@@ -585,7 +617,21 @@ public:
 	FUNC2RC(RID, mesh_surface_get_skin_buffer_rd_rid, RID, int)
 	FUNC2RC(RID, mesh_surface_get_index_buffer_rd_rid, RID, int)
 
-	FUNC1S(mesh_debug_usage, List<RenderingServerTypes::MeshInfo> *)
+	virtual void mesh_debug_usage(List<RenderingServerTypes::MeshInfo> *p_list) override {
+		ResourceOperationGuard resource_guard(this);
+		if (!resource_guard) {
+			return;
+		}
+		redraw_request();
+		if (Thread::get_caller_id() != server_thread) {
+			command_queue.push_and_sync(RSG::mesh_storage, &RendererMeshStorage::mesh_debug_usage, p_list);
+			SYNC_DEBUG
+			MAIN_THREAD_SYNC_CHECK
+		} else {
+			command_queue.flush_if_pending();
+			RSG::mesh_storage->mesh_debug_usage(p_list);
+		}
+	}
 
 	/* MULTIMESH API */
 
