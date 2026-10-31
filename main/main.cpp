@@ -2844,7 +2844,12 @@ Error Main::setup(const char *execpath, int argc, char *argv[], bool p_second_ph
 		editor_thread_benchmark_workload = OS::get_singleton()->get_environment("GODOT_BENCH_WORKLOAD_ID");
 		editor_thread_benchmark_workload_hash = OS::get_singleton()->get_environment("GODOT_BENCH_WORKLOAD_SHA256");
 		editor_thread_benchmark_trial_id = OS::get_singleton()->get_environment("GODOT_BENCH_TRIAL_ID").to_int();
-		if (editor_thread_benchmark_host.is_empty() || editor_thread_benchmark_workload.is_empty() || editor_thread_benchmark_workload_hash.length() != 64) {
+		bool valid_workload_hash = editor_thread_benchmark_workload_hash.length() == 64;
+		for (int i = 0; valid_workload_hash && i < editor_thread_benchmark_workload_hash.length(); i++) {
+			const char32_t c = editor_thread_benchmark_workload_hash[i];
+			valid_workload_hash = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+		}
+		if (editor_thread_benchmark_host.is_empty() || editor_thread_benchmark_workload.is_empty() || !valid_workload_hash) {
 			OS::get_singleton()->print("Editor benchmark requires host/workload environment metadata and a 64-character workload SHA-256.\n");
 			goto error;
 		}
