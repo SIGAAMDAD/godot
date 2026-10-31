@@ -2019,6 +2019,7 @@ public:
 	uint32_t get_frame_slot() const { return frame; }
 	bool is_on_render_thread() const { return render_thread_id == Thread::get_caller_id(); }
 	bool is_main_rendering_device() const { return is_main_instance; }
+	bool is_active() const { return lifecycle_state.load(std::memory_order_acquire) == LifecycleState::ACTIVE; }
 	bool is_finalized() const { return lifecycle_state.load(std::memory_order_acquire) == LifecycleState::FINALIZED; }
 
 	bool is_composite_alpha_supported() const;

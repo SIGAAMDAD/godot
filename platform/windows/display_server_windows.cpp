@@ -8639,14 +8639,14 @@ void DisplayServerWindows::_resize_gpu_window(DisplayServerEnums::WindowID p_win
 			queued_gpu_window_resizes.erase(p_window);
 		}
 	}
-	if (is_valid && rendering_context != nullptr && rendering_device != nullptr && !rendering_device->is_finalized()) {
+	if (is_valid && rendering_context != nullptr && rendering_device != nullptr && rendering_device->is_active()) {
 		rendering_context->window_set_size(p_window, resize.width, resize.height);
 	}
 }
 
 void DisplayServerWindows::_execute_gpu_window_op(int64_t p_address) {
 	WindowGpuOp *request = reinterpret_cast<WindowGpuOp *>(uintptr_t(uint64_t(p_address)));
-	if (rendering_device == nullptr || rendering_device->is_finalized()) {
+	if (rendering_device == nullptr || !rendering_device->is_active()) {
 		request->result = request->kind == WindowGpuOpKind::RELEASE ? OK : ERR_UNAVAILABLE;
 		return;
 	}
