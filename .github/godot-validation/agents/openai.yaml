@@ -1,0 +1,4 @@
+interface:
+  display_name: "Godot Fork Validation"
+  short_description: "Diagnose and verify Godot engine CI and native builds against exact commits"
+  default_prompt: "Audit the Godot fork build matrix and failures, aggregate independent causes, validate source and CI evidence, and give an exact-SHA acceptance verdict."

@@ -67,6 +67,12 @@
 				- a compute list is currently active (created by [method compute_list_begin])
 			</description>
 		</method>
+		<method name="buffer_flush">
+			<return type="void" />
+			<param index="0" name="buffer" type="RID" />
+			<description>
+			</description>
+		</method>
 		<method name="buffer_get_data">
 			<return type="PackedByteArray" />
 			<param index="0" name="buffer" type="RID" />
@@ -103,6 +109,12 @@
 			<description>
 				Returns the address of the given [param buffer] which can be passed to shaders in any way to access underlying data. Buffer must have been created with this feature enabled.
 				[b]Note:[/b] You must check that the GPU supports this functionality by calling [method has_feature] with [constant SUPPORTS_BUFFER_DEVICE_ADDRESS] as a parameter.
+			</description>
+		</method>
+		<method name="buffer_persistent_map_advance">
+			<return type="int" />
+			<param index="0" name="buffer" type="RID" />
+			<description>
 			</description>
 		</method>
 		<method name="buffer_update">
@@ -674,6 +686,11 @@
 			<return type="int" />
 			<description>
 				Returns the frame count kept by the graphics API. Higher values result in higher input lag, but with more consistent throughput. For the main [RenderingDevice], frames are cycled (usually 3 with triple-buffered V-Sync enabled). However, local [RenderingDevice]s only have 1 frame.
+			</description>
+		</method>
+		<method name="get_frame_slot" qualifiers="const">
+			<return type="int" />
+			<description>
 			</description>
 		</method>
 		<method name="get_memory_usage" qualifiers="const">
@@ -1424,22 +1441,22 @@
 			- Vulkan: [code]VkFormat[/code].
 			- D3D12: [code]DXGI_FORMAT[/code].
 		</constant>
-		<constant name="DRIVER_RESOURCE_SAMPLER" value="8" enum="DriverResource">
+		<constant name="DRIVER_RESOURCE_SAMPLER" value="10" enum="DriverResource">
 			- Vulkan: [code]VkSampler[/code].
 		</constant>
-		<constant name="DRIVER_RESOURCE_UNIFORM_SET" value="9" enum="DriverResource">
+		<constant name="DRIVER_RESOURCE_UNIFORM_SET" value="11" enum="DriverResource">
 			- Vulkan: [code]VkDescriptorSet[/code].
 		</constant>
-		<constant name="DRIVER_RESOURCE_BUFFER" value="10" enum="DriverResource">
+		<constant name="DRIVER_RESOURCE_BUFFER" value="12" enum="DriverResource">
 			Buffer of any kind of (storage, vertex, etc.).
 			- Vulkan: [code]VkBuffer[/code].
 			- D3D12: [code]ID3D12Resource[/code].
 		</constant>
-		<constant name="DRIVER_RESOURCE_COMPUTE_PIPELINE" value="11" enum="DriverResource">
+		<constant name="DRIVER_RESOURCE_COMPUTE_PIPELINE" value="13" enum="DriverResource">
 			- Vulkan: [code]VkPipeline[/code].
 			- Metal: [code]MTLComputePipelineState[/code].
 		</constant>
-		<constant name="DRIVER_RESOURCE_RENDER_PIPELINE" value="12" enum="DriverResource">
+		<constant name="DRIVER_RESOURCE_RENDER_PIPELINE" value="14" enum="DriverResource">
 			- Vulkan: [code]VkPipeline[/code].
 			- Metal: [code]MTLRenderPipelineState[/code].
 		</constant>
@@ -1459,15 +1476,15 @@
 		</constant>
 		<constant name="DRIVER_RESOURCE_VULKAN_IMAGE_NATIVE_TEXTURE_FORMAT" value="7" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_TEXTURE_DATA_FORMAT] instead.">
 		</constant>
-		<constant name="DRIVER_RESOURCE_VULKAN_SAMPLER" value="8" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_SAMPLER] instead.">
+		<constant name="DRIVER_RESOURCE_VULKAN_SAMPLER" value="10" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_SAMPLER] instead.">
 		</constant>
-		<constant name="DRIVER_RESOURCE_VULKAN_DESCRIPTOR_SET" value="9" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_UNIFORM_SET] instead.">
+		<constant name="DRIVER_RESOURCE_VULKAN_DESCRIPTOR_SET" value="11" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_UNIFORM_SET] instead.">
 		</constant>
-		<constant name="DRIVER_RESOURCE_VULKAN_BUFFER" value="10" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_BUFFER] instead.">
+		<constant name="DRIVER_RESOURCE_VULKAN_BUFFER" value="12" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_BUFFER] instead.">
 		</constant>
-		<constant name="DRIVER_RESOURCE_VULKAN_COMPUTE_PIPELINE" value="11" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_COMPUTE_PIPELINE] instead.">
+		<constant name="DRIVER_RESOURCE_VULKAN_COMPUTE_PIPELINE" value="13" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_COMPUTE_PIPELINE] instead.">
 		</constant>
-		<constant name="DRIVER_RESOURCE_VULKAN_RENDER_PIPELINE" value="12" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_RENDER_PIPELINE] instead.">
+		<constant name="DRIVER_RESOURCE_VULKAN_RENDER_PIPELINE" value="14" enum="DriverResource" deprecated="Use [constant DRIVER_RESOURCE_RENDER_PIPELINE] instead.">
 		</constant>
 		<constant name="DATA_FORMAT_R4G4_UNORM_PACK8" value="0" enum="DataFormat">
 			4-bit-per-channel red/green channel data format, packed into 8 bits. Values are in the [code][0.0, 1.0][/code] range.
@@ -2366,6 +2383,8 @@
 		</constant>
 		<constant name="BUFFER_CREATION_AS_STORAGE_BIT" value="2" enum="BufferCreationBits" is_bitfield="true">
 			Set this flag so that it is created as storage. This is useful if Compute Shaders need access (for reading or writing) to the buffer, e.g. skeletal animations are processed in Compute Shaders which need access to vertex buffers, to be later consumed by vertex shaders as part of the regular rasterization pipeline.
+		</constant>
+		<constant name="BUFFER_CREATION_DYNAMIC_PERSISTENT_BIT" value="4" enum="BufferCreationBits" is_bitfield="true">
 		</constant>
 		<constant name="BUFFER_CREATION_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT" value="8" enum="BufferCreationBits" is_bitfield="true" experimental="">
 			Allows usage of this buffer as input data for an acceleration structure build operation. You must first check that the GPU supports it:

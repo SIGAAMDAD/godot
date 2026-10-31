@@ -1,20 +1,90 @@
 name: 🔗 GHA
 on: [push, pull_request, merge_group, workflow_dispatch]
 
+# Preserve exact-SHA evidence. A subsequent push must not cancel a validation
+# run that is still revealing platform-specific build failures.
 concurrency:
-  group: ${{ github.workflow }}|${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}|${{ github.ref }}|${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
-  # First stage: Only static checks, fast and prevent expensive builds from running.
-
   static-checks:
     if: ${{ !vars.DISABLE_GODOT_CI || github.run_attempt > 1 || github.event_name == 'workflow_dispatch' }}
     name: 📊 Static checks
     uses: ./.github/workflows/static_checks.yml
 
-  # Second stage: Run all the builds and some of the tests.
+  # Keep validation tooling independently executable when Godot's style hooks fail.
+  validation-tooling:
+    name: 🔎 Fork validation / self-tests and workflow structure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Run validation-tooling regression tests
+        run: python -m unittest discover -s .github/godot-validation/tests -v
+      - name: Audit root workflow
+        run: |
+          python .github/godot-validation/scripts/godot_ci_workflow_audit.py \
+            --workflow .github/workflows/runner.yml \
+            --output fork-validation-workflow-audit.json
+      - name: Upload workflow audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-validation-workflow-audit
+          path: fork-validation-workflow-audit.json
+          if-no-files-found: warn
 
+  # Independent minimal Linux compiler sentinel: still runs on a style failure.
+  # Run the same restrictive Godot feature set used by the existing Linux matrix.
+  linux-sentinel-build:
+    name: 🐧 Linux / Independent minimal compiler sentinel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-bin
+      - name: Setup Python and SCons
+        uses: ./.github/actions/godot-deps
+      - name: Compile minimal Linux template
+        uses: ./.github/actions/godot-build
+        with:
+          platform: linuxbsd
+          target: template_release
+          scons-flags: >-
+            dev_mode=yes
+            modules_enabled_by_default=no
+            module_text_server_fb_enabled=no
+            disable_3d=yes
+            disable_advanced_gui=yes
+            disable_physics_2d=yes
+            disable_physics_3d=yes
+            deprecated=no
+            minizip=no
+            brotli=no
+            accesskit=no
+      - name: Test minimal binary
+        run: |
+          ./bin/godot.linuxbsd.template_release.x86_64 --version
+          ./bin/godot.linuxbsd.template_release.x86_64 --headless --test
+
+  # Full platform matrix is retained; sources-changed and clangd-tidy contracts
+  # still come from the static-check job.
   android-build:
     name: 🤖 Android
     needs: static-checks

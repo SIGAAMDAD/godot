@@ -1,0 +1,44 @@
+#!/bin/sh
+# Git History Curator: Godot exact-commit clang-format gate.
+# Install by reviewing and incorporating into .git/hooks/pre-push.
+set -eu
+root=$(git rev-parse --show-toplevel)
+gate="$root/.github/scripts/godot_clang_format_gate.py"
+if [ ! -f "$gate" ]; then
+    echo "BLOCKED: missing tracked Godot format gate: $gate" >&2
+    exit 2
+fi
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "$local_ref" ] || continue
+    case "$local_ref" in
+        refs/heads/*|refs/tags/*) ;;
+        *) continue ;;
+    esac
+    case "$local_sha" in
+        0000000000000000000000000000000000000000) continue ;;
+    esac
+    case "$remote_sha" in
+        0000000000000000000000000000000000000000)
+            if ! base_ref=$(git rev-parse --verify refs/remotes/origin/master 2>/dev/null); then
+                echo "BLOCKED: fetch origin/master before pushing a new Godot branch" >&2
+                exit 2
+            fi
+            ;;
+        *)
+            if ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+                echo "BLOCKED: fetch remote branch $remote_ref ($remote_sha) before pushing" >&2
+                exit 2
+            fi
+            base_ref="$remote_sha"
+            ;;
+    esac
+    if ! base=$(git merge-base "$base_ref" "$local_sha"); then
+        echo "BLOCKED: no known merge-base for $local_ref" >&2
+        exit 2
+    fi
+    if [ "$base" = "$local_sha" ]; then
+        continue
+    fi
+    python3 "$gate" --repo "$root" --base "$base" --head "$local_sha" \
+        --clang-format "${GODOT_CLANG_FORMAT:-clang-format}"
+done

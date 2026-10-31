@@ -113,7 +113,25 @@ jobs:
         if: matrix.target == 'template_debug'
         run: |
           cd platform/android/java
-          ./gradlew generateGodotTemplates
+          set -o pipefail
+          for attempt in 1 2 3; do
+            log_file="$(mktemp)"
+            gradle_args=()
+            if [ "$attempt" -gt 1 ]; then
+              gradle_args+=(--refresh-dependencies)
+            fi
+            if ./gradlew generateGodotTemplates "${gradle_args[@]}" 2>&1 | tee "$log_file"; then
+              rm -f "$log_file"
+              break
+            fi
+            if ! grep -Eq 'Could not resolve all artifacts|Could not resolve all files' "$log_file" || [ "$attempt" -eq 3 ]; then
+              rm -f "$log_file"
+              exit 1
+            fi
+            rm -f "$log_file"
+            echo "::warning::Gradle dependency resolution failed; retrying attempt $(( attempt + 1 )) of 3"
+            sleep "$(( attempt * 15 ))"
+          done
           cd ../../..
           ls -l bin/
 

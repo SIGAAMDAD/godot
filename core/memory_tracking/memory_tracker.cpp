@@ -6,28 +6,38 @@
 /*                        https://godotengine.org                         */
 /**************************************************************************/
 /* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
-/*                                                                          */
-/* Permission is hereby granted, free of charge, to any person obtaining   */
-/* a copy of this software and associated documentation files (the         */
-/* "Software"), to deal in the Software without restriction, including      */
-/* without limitation the rights to use, copy, modify, merge, publish,     */
-/* distribute, sublicense, and/or sell copies of the Software, and to      */
-/* permit persons to whom the Software is furnished to do so, subject to   */
-/* the following conditions:                                               */
-/*                                                                          */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.        */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
 #include "memory_tracker.h"
 
 #include <atomic>
 #include <chrono>
-#include <functional>
 #include <cstdlib>
+#include <cstring>
+#include <functional>
 #include <mutex>
 #include <new>
 #include <thread>
-#include <cstring>
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__GLIBC__) || defined(__APPLE__)
@@ -122,7 +132,6 @@ size_t slot_index(uintptr_t p_ptr) {
 	return (size_t)h & (RECORDS_PER_SHARD - 1);
 }
 
-
 uint32_t sample_stack(State *p_state) {
 	void *sample[CALLSTACK_DEPTH] = {};
 	size_t count = 0;
@@ -184,11 +193,12 @@ void write_event(State *p_state, RecordKind p_kind, const Slot &p_record, bool p
 	std::lock_guard<std::mutex> guard(p_state->event_mutex);
 	const uint64_t seq = p_state->sequence.load(std::memory_order_relaxed) + 1;
 	const uint64_t timestamp_us = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count());
+			std::chrono::steady_clock::now().time_since_epoch())
+					.count());
 	const uint64_t thread_id = uint64_t(std::hash<std::thread::id>{}(std::this_thread::get_id()));
 	p_state->event_ring[(seq - 1) % EVENT_CAPACITY] = { seq, p_record.allocation_id, p_record.address, p_record.bytes,
-			p_record.category, p_kind, p_gpu, p_record.stack_id, timestamp_us, thread_id,
-			p_state->frame_id.load(std::memory_order_relaxed) };
+		p_record.category, p_kind, p_gpu, p_record.stack_id, timestamp_us, thread_id,
+		p_state->frame_id.load(std::memory_order_relaxed) };
 	p_state->sequence.store(seq, std::memory_order_release);
 	if (seq > EVENT_CAPACITY) {
 		p_state->overwritten_events.fetch_add(1, std::memory_order_relaxed);
@@ -196,15 +206,20 @@ void write_event(State *p_state, RecordKind p_kind, const Slot &p_record, bool p
 }
 
 void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind p_kind, bool p_gpu = false, bool p_logical = false) {
-	auto &live_bytes = p_logical ? p_state->logical_live_bytes : p_gpu ? p_state->gpu_live_bytes : p_state->live_bytes;
-	auto &peak_bytes = p_logical ? p_state->logical_peak_bytes : p_gpu ? p_state->gpu_peak_bytes : p_state->peak_bytes;
-	auto &live_allocations = p_logical ? p_state->logical_live_allocations : p_gpu ? p_state->gpu_live_allocations : p_state->live_allocations;
-	auto &total_allocations = p_logical ? p_state->logical_total_allocations : p_gpu ? p_state->gpu_total_allocations : p_state->total_allocations;
+	auto &live_bytes = p_logical ? p_state->logical_live_bytes : p_gpu ? p_state->gpu_live_bytes
+																	   : p_state->live_bytes;
+	auto &peak_bytes = p_logical ? p_state->logical_peak_bytes : p_gpu ? p_state->gpu_peak_bytes
+																	   : p_state->peak_bytes;
+	auto &live_allocations = p_logical ? p_state->logical_live_allocations : p_gpu ? p_state->gpu_live_allocations
+																				   : p_state->live_allocations;
+	auto &total_allocations = p_logical ? p_state->logical_total_allocations : p_gpu ? p_state->gpu_total_allocations
+																					 : p_state->total_allocations;
 	if (p_address <= TOMBSTONE) {
 		return;
 	}
 	const uint32_t stack_id = sample_stack(p_state);
-	Shard &shard = (p_logical ? p_state->logical_shards : p_gpu ? p_state->gpu_shards : p_state->shards)[shard_index(p_address)];
+	Shard &shard = (p_logical ? p_state->logical_shards : p_gpu ? p_state->gpu_shards
+																: p_state->shards)[shard_index(p_address)];
 	Slot added;
 	bool inserted = false;
 	{
@@ -262,12 +277,15 @@ void add_record(State *p_state, uintptr_t p_address, size_t p_bytes, RecordKind 
 }
 
 void remove_record(State *p_state, uintptr_t p_address, bool p_gpu = false, bool p_logical = false) {
-	auto &live_bytes = p_logical ? p_state->logical_live_bytes : p_gpu ? p_state->gpu_live_bytes : p_state->live_bytes;
-	auto &live_allocations = p_logical ? p_state->logical_live_allocations : p_gpu ? p_state->gpu_live_allocations : p_state->live_allocations;
+	auto &live_bytes = p_logical ? p_state->logical_live_bytes : p_gpu ? p_state->gpu_live_bytes
+																	   : p_state->live_bytes;
+	auto &live_allocations = p_logical ? p_state->logical_live_allocations : p_gpu ? p_state->gpu_live_allocations
+																				   : p_state->live_allocations;
 	if (p_address <= TOMBSTONE) {
 		return;
 	}
-	Shard &shard = (p_logical ? p_state->logical_shards : p_gpu ? p_state->gpu_shards : p_state->shards)[shard_index(p_address)];
+	Shard &shard = (p_logical ? p_state->logical_shards : p_gpu ? p_state->gpu_shards
+																: p_state->shards)[shard_index(p_address)];
 	Slot removed;
 	{
 		std::lock_guard<std::mutex> guard(shard.mutex);
@@ -418,7 +436,8 @@ static size_t enumerate_records(size_t p_offset, Record *r_records, size_t p_cap
 	}
 	size_t skipped = 0;
 	size_t count = 0;
-	for (Shard &shard : (p_domain == 2 ? p->logical_shards : p_domain == 1 ? p->gpu_shards : p->shards)) {
+	for (Shard &shard : (p_domain == 2 ? p->logical_shards : p_domain == 1 ? p->gpu_shards
+																		   : p->shards)) {
 		std::lock_guard<std::mutex> guard(shard.mutex);
 		for (const Slot &s : shard.slots) {
 			if (s.address <= TOMBSTONE) {
@@ -559,13 +578,13 @@ void record_free(void *p_ptr) {
 	}
 }
 
-void record_realloc(void *p_old_ptr, void *p_new_ptr, size_t p_bytes, bool p_success) {
+void record_realloc(uintptr_t p_old_address, void *p_new_ptr, size_t p_bytes, bool p_success) {
 	if (!p_success) {
 		return;
 	}
 	State *p = enter_hook();
 	if (p) {
-		remove_record(p, (uintptr_t)p_old_ptr);
+		remove_record(p, p_old_address);
 		if (p_new_ptr && p_bytes) {
 			add_record(p, (uintptr_t)p_new_ptr, p_bytes, RecordKind::REALLOC);
 		}

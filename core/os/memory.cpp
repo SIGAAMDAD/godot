@@ -135,6 +135,7 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 		return alloc_static(p_bytes, p_pad_align);
 	}
 
+	const uintptr_t old_address = reinterpret_cast<uintptr_t>(p_memory);
 	uint8_t *mem = (uint8_t *)p_memory;
 
 #ifdef DEBUG_ENABLED
@@ -173,7 +174,7 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 #endif
 			s = (uint64_t *)(new_mem + SIZE_OFFSET);
 			*s = p_bytes;
-			GodotMemoryTracking::record_realloc(p_memory, new_mem + DATA_OFFSET, p_bytes, true);
+			GodotMemoryTracking::record_realloc(old_address, new_mem + DATA_OFFSET, p_bytes, true);
 			return new_mem + DATA_OFFSET;
 		}
 	} else {
@@ -183,7 +184,7 @@ void *Memory::realloc_static(void *p_memory, size_t p_bytes, bool p_pad_align) {
 		ERR_FAIL_COND_V(mem == nullptr && p_bytes > 0, nullptr);
 		GodotProfileAlloc(mem, p_bytes);
 
-		GodotMemoryTracking::record_realloc(p_memory, mem, p_bytes, mem != nullptr || p_bytes == 0);
+		GodotMemoryTracking::record_realloc(old_address, mem, p_bytes, mem != nullptr || p_bytes == 0);
 		return mem;
 	}
 }
