@@ -65,7 +65,7 @@ void Terrain3DForwardPlusBridge::_bind_methods() {
 void Terrain3DForwardPlusBridge::_dispatch_rd_request(int64_t p_request_address) {
 	RDRequest &request = *reinterpret_cast<RDRequest *>(uintptr_t(uint64_t(p_request_address)));
 	RenderingDevice *rd = RenderingDevice::get_singleton();
-	if (rd != nullptr && rd->is_on_render_thread()) {
+	if (rd != nullptr && rd->is_active() && rd->is_on_render_thread()) {
 		switch (request.kind) {
 			case RD_COMPLETE: {
 				NativeCallbackSlot *slot = active_slot.load(std::memory_order_acquire);
@@ -96,6 +96,9 @@ void Terrain3DForwardPlusBridge::_dispatch_rd_request(int64_t p_request_address)
 int64_t Terrain3DForwardPlusBridge::_request_rd(RDRequestKind p_kind, int64_t p_value) {
 	RenderingDevice *rd = RenderingDevice::get_singleton();
 	ERR_FAIL_NULL_V(rd, 0);
+	if (!rd->is_active()) {
+		return 0;
+	}
 	RDRequest *request = memnew(RDRequest);
 	request->kind = p_kind;
 	request->value = p_value;
