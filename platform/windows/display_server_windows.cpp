@@ -1907,7 +1907,7 @@ DisplayServerEnums::WindowID DisplayServerWindows::create_sub_window(DisplayServ
 	no_redirection_bitmap = OS::get_singleton()->is_layered_allowed() && rendering_driver == "d3d12";
 #endif
 
-	window_id = window_id_counter;
+	DisplayServerEnums::WindowID window_id = window_id_counter;
 	Error err = _create_window(window_id, p_mode, p_flags, p_rect, p_exclusive, p_transient_parent, nullptr, no_redirection_bitmap);
 	ERR_FAIL_COND_V_MSG(err != OK, DisplayServerEnums::INVALID_WINDOW_ID, "Failed to create sub window.");
 	++window_id_counter;
