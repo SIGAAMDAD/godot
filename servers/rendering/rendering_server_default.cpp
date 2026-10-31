@@ -79,11 +79,17 @@ void RenderingServerDefault::request_frame_stage_callback(RenderingServerTypes::
 		return;
 	}
 	MutexLock lock(frame_callback_mutex);
-	pending_frame_callbacks.push_back({ p_stage, p_callable, {} });
+	// Register for the next frame, not a frame still executing on the worker.
+	RenderingServerTypes::RenderFrameToken target{ next_frame_token.load(std::memory_order_relaxed) + 1, 0 };
+	pending_frame_callbacks.push_back({ p_stage, p_callable, target });
 }
 
 void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step, uint64_t p_frame_id) {
 	const uint64_t render_frame_begin_us = OS::get_singleton()->get_ticks_usec();
+#ifdef RD_ENABLED
+	RenderingDevice *rd_at_frame_start = RenderingDevice::get_singleton();
+	const uint64_t gpu_before_frame = rd_at_frame_start != nullptr && rd_at_frame_start->is_active() ? rd_at_frame_start->get_last_submitted_gpu_frame() : 0;
+#endif
 	GodotProfileZoneGroupedFirst(_profile_zone, "rasterizer->begin_frame");
 	RSG::rasterizer->begin_frame(frame_step);
 
@@ -128,21 +134,27 @@ void RenderingServerDefault::_draw(bool p_swap_buffers, double frame_step, uint6
 		RenderingServerTypes::RenderFrameToken token{ p_frame_id, 0 };
 #ifdef RD_ENABLED
 		RenderingDevice *rd = RenderingDevice::get_singleton();
-		if (rd != nullptr && !rd->is_finalized()) {
-			token.gpu_submission = rd->get_last_submitted_gpu_frame();
+		if (rd != nullptr && rd->is_active()) {
+			const uint64_t submitted_gpu = rd->get_last_submitted_gpu_frame();
+			token.gpu_submission = submitted_gpu > gpu_before_frame ? submitted_gpu : 0;
 		}
-		const uint64_t completed_gpu = rd != nullptr && !rd->is_finalized() ? rd->get_last_completed_gpu_frame() : 0;
+		const uint64_t completed_gpu = rd != nullptr && rd->is_active() ? rd->get_last_completed_gpu_frame() : 0;
 #else
 		const uint64_t completed_gpu = 0;
 #endif
 		MutexLock lock(frame_callback_mutex);
 		for (List<FrameStageCallback>::Element *E = pending_frame_callbacks.front(); E;) {
 			List<FrameStageCallback>::Element *next = E->next();
-			if (E->get().stage != RenderingServerTypes::RenderFrameCallbackStage::BEFORE_DRAW) {
+			if (E->get().stage != RenderingServerTypes::RenderFrameCallbackStage::BEFORE_DRAW && E->get().token.frame_id <= p_frame_id) {
 				FrameStageCallback callback = E->get();
 				callback.token = token;
-				if (callback.stage == RenderingServerTypes::RenderFrameCallbackStage::AFTER_GPU_COMPLETE && token.gpu_submission != 0) {
-					awaiting_gpu_callbacks.push_back(callback);
+				if (callback.stage == RenderingServerTypes::RenderFrameCallbackStage::AFTER_GPU_COMPLETE) {
+					if (token.gpu_submission != 0) {
+						awaiting_gpu_callbacks.push_back(callback);
+					} else {
+						// No GPU submission exists, so there is no fence to await.
+						main_frame_callbacks.push_back(callback);
+					}
 				} else if (callback.stage == RenderingServerTypes::RenderFrameCallbackStage::AFTER_GPU_SUBMIT) {
 					main_frame_callbacks.push_back(callback);
 				}
@@ -719,14 +731,15 @@ void RenderingServerDefault::sync() {
 
 void RenderingServerDefault::draw(bool p_present, double frame_step) {
 	ERR_FAIL_COND_MSG(!Thread::is_main_thread(), "Manually triggering the draw function from the RenderingServer can only be done on the main thread. Call this function from the main thread or use call_deferred().");
-	const uint64_t frame_id = next_frame_token.fetch_add(1, std::memory_order_relaxed) + 1;
+	uint64_t frame_id = 0;
 	// Before-draw callbacks execute on the main thread, with their frame token.
 	List<FrameStageCallback> before_draw;
 	{
 		MutexLock lock(frame_callback_mutex);
+		frame_id = next_frame_token.fetch_add(1, std::memory_order_relaxed) + 1;
 		for (List<FrameStageCallback>::Element *E = pending_frame_callbacks.front(); E;) {
 			List<FrameStageCallback>::Element *next = E->next();
-			if (E->get().stage == RenderingServerTypes::RenderFrameCallbackStage::BEFORE_DRAW) {
+			if (E->get().stage == RenderingServerTypes::RenderFrameCallbackStage::BEFORE_DRAW && E->get().token.frame_id <= frame_id) {
 				FrameStageCallback callback = E->get();
 				callback.token.frame_id = frame_id;
 				before_draw.push_back(callback);
